@@ -1,0 +1,25 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: timeseries/Dockerfile
+    environment:
+      - USERNAME=CHANGEME
+      - PASSWORD=CHANGEME
+      - API_URL=https://api.example.com
+      - TOKEN_REFRESH_INTERVAL_SECS=3600
+      - DEVICE_REFRESH_INTERVAL_SECS=600
+      - REDIS_ADDR=redis:6379
+    restart: on-failure
+  redis:
+    image: redislabs/redistimeseries:1.4.7
+    ports:
+      - "6379:6379"
+  grafana:
+    image: grafana/grafana:7.3.4
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_INSTALL_PLUGINS=redis-datasource

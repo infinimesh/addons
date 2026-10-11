@@ -1,0 +1,14 @@
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+.env
+.env.*
+!.env.example
+*.pem
+.idea/
+.vscode/
+.DS_Store
+coverage.out
+data/

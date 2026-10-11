@@ -1,0 +1,29 @@
+services:
+  producer:
+    build:
+      context: ..
+      dockerfile: redisstream/Dockerfile
+    environment:
+      - USERNAME=CHANGEME
+      - PASSWORD=CHANGEME
+      - API_URL=https://api.example.com
+      - TOKEN_REFRESH_INTERVAL_SECS=3600
+      - OBJECT_REFRESH_INTERVAL_SECS=600
+      - REDIS_ADDR=redis:6379
+    restart: on-failure
+  consumer:
+    build:
+      context: ..
+      dockerfile: saphana/Dockerfile
+    environment:
+      - SAPHANA_INITDB=true
+      - SAPHANA_USERNAME=CHANGEME
+      - SAPHANA_PASSWORD=CHANGEME
+      - SAPHANA_HOST=CHANGEME
+      - SAPHANA_PORT=443
+      - REDIS_ADDR=redis:6379
+    restart: on-failure
+  redis:
+    image: redis:6.0.9-alpine
+    ports:
+      - "6379:6379"
