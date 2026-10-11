@@ -1,6 +1,6 @@
 # Redis stream
 
-Reads the Infinimesh object API and publishes device events on a Redis stream. Sink addons consume that stream through [addon-sdk](https://github.com/infinimesh/addon-sdk) `stream/consumer`.
+Reads the Infinimesh object API and publishes device events on a Redis stream. Sinks consume that stream through `sdk/stream/consumer`.
 
 Set `USERNAME`, `PASSWORD`, `API_URL`, and `REDIS_ADDR`.
 

@@ -1,8 +1,6 @@
-# addon-sdk
+# sdk
 
-Module `github.com/infinimesh/addon-sdk`.
-
-Shared client for Infinimesh addons:
+Packages under `github.com/infinimesh/addons/sdk`.
 
 - `api` — token and object API
 - `wrappers` — object iteration
