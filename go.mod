@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/storage v1.69.0
-	github.com/Azure/azure-storage-blob-go v0.12.0
+	github.com/Azure/azure-storage-blob-go v0.15.0
 	github.com/RedisTimeSeries/redistimeseries-go v1.4.4
 	github.com/SAP/go-hdb v1.19.2
 	github.com/aws/aws-sdk-go v1.55.8
