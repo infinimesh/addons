@@ -1,6 +1,6 @@
 module github.com/infinimesh/addons
 
-go 1.26.0
+go 1.27.2
 
 require (
 	cloud.google.com/go/storage v1.69.0
