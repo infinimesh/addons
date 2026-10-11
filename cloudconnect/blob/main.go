@@ -33,7 +33,7 @@ func main() {
 	csvprocessor.WalkLoop(csvprocessor.WalkFunc(func(f *os.File) error {
 		_, err = containerURL.
 			NewBlockBlobURL(f.Name()).
-			Upload(context.Background(), f, azblob.BlobHTTPHeaders{}, azblob.Metadata{}, azblob.BlobAccessConditions{}, azblob.DefaultAccessTier, nil, azblob.ClientProvidedKeyOptions{})
+			Upload(context.Background(), f, azblob.BlobHTTPHeaders{}, azblob.Metadata{}, azblob.BlobAccessConditions{}, azblob.DefaultAccessTier, nil, azblob.ClientProvidedKeyOptions{}, azblob.ImmutabilityPolicyOptions{})
 		return err
 	}))
 }
