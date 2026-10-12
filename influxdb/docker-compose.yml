@@ -1,0 +1,33 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: influxdb/Dockerfile
+    environment:
+      - USERNAME=CHANGEME
+      - PASSWORD=CHANGEME
+      - API_URL=https://api.example.com
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=CHANGEME
+      - INFLUX_ORG=infinimesh
+      - INFLUX_BUCKET=shadows
+    depends_on:
+      - influxdb
+    restart: on-failure
+  # InfluxDB 2 for trying it out. Delete this service and point INFLUX_URL at
+  # your own InfluxDB 2, InfluxDB 3 or InfluxDB Cloud instead.
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=CHANGEME
+      - DOCKER_INFLUXDB_INIT_ORG=infinimesh
+      - DOCKER_INFLUXDB_INIT_BUCKET=shadows
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=CHANGEME
+    volumes:
+      - influxdata:/var/lib/influxdb2
+volumes:
+  influxdata:
