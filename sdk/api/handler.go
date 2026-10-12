@@ -80,6 +80,11 @@ type Object struct {
 	UID  string `json:"uid"`
 	Name string `json:"name"`
 	Kind string `json:"kind"`
+	// Tags are the device tags.
+	Tags []string `json:"tags,omitempty"`
+	// Namespace and NamespaceName are the namespace the device was listed in.
+	Namespace     string `json:"namespace,omitempty"`
+	NamespaceName string `json:"namespace_name,omitempty"`
 }
 
 func (h *handlerImpl) GetObjects(namespaceID string) (*ObjectsRes, error) {
@@ -91,7 +96,7 @@ func (h *handlerImpl) GetObjects(namespaceID string) (*ObjectsRes, error) {
 	}
 	ret := &ObjectsRes{}
 	for _, d := range res.GetDevices() {
-		ret.Objects = append(ret.Objects, Object{UID: d.GetUuid(), Name: d.GetTitle(), Kind: "device"})
+		ret.Objects = append(ret.Objects, Object{UID: d.GetUuid(), Name: d.GetTitle(), Kind: "device", Tags: d.GetTags(), Namespace: namespaceID})
 	}
 	return ret, nil
 }

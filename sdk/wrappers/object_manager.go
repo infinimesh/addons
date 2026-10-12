@@ -80,6 +80,9 @@ func (i *objectManagerImpl) refreshObjects() error {
 				return fmt.Errorf("failed to get objects: %w", err)
 			}
 			for _, o := range objectsRes.Objects {
+				if o.NamespaceName == "" {
+					o.NamespaceName = ns.Name
+				}
 				currObjects[o.UID] = o
 			}
 		}
