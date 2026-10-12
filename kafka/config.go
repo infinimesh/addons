@@ -106,13 +106,13 @@ func loadConfig(env func(string) string) (*config, error) {
 	if c.OnlyReported, err = flag("KAFKA_ONLY_REPORTED", false); err != nil {
 		return nil, err
 	}
-	p, err := strconv.Atoi(getenv(env, "KAFKA_PARTITIONS", "1"))
+	p, err := strconv.ParseInt(getenv(env, "KAFKA_PARTITIONS", "1"), 10, 32)
 	if err != nil || p <= 0 {
 		return nil, fmt.Errorf("invalid KAFKA_PARTITIONS value")
 	}
 	c.Partitions = int32(p)
-	r, err := strconv.Atoi(getenv(env, "KAFKA_REPLICATION_FACTOR", "1"))
-	if err != nil || r <= 0 || r > 32767 {
+	r, err := strconv.ParseInt(getenv(env, "KAFKA_REPLICATION_FACTOR", "1"), 10, 16)
+	if err != nil || r <= 0 {
 		return nil, fmt.Errorf("invalid KAFKA_REPLICATION_FACTOR value")
 	}
 	c.ReplicationFactor = int16(r)
