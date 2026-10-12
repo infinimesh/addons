@@ -4,76 +4,80 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"strconv"
-	"time"
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/infinimesh/addons/sdk/api"
+	"github.com/infinimesh/addons/sdk/config"
 	"github.com/infinimesh/addons/sdk/wrappers"
 )
 
 const (
-	envApiUrl                    = "API_URL"
-	envUsername                  = "USERNAME"
-	envPassword                  = "PASSWORD"
-	envTokenRefreshIntervalSecs  = "TOKEN_REFRESH_INTERVAL_SECS"
-	envObjectRefreshIntervalSecs = "OBJECT_REFRESH_INTERVAL_SECS"
-	envRedisAddr                 = "REDIS_ADDR"
+	envApiUrl       = "API_URL"
+	envUsername     = "USERNAME"
+	envPassword     = "PASSWORD"
+	envStreamMaxLen = "REDIS_STREAM_MAXLEN"
 )
 
 func main() {
-	redisPool := &redis.Pool{Dial: func() (redis.Conn, error) {
-		return redis.Dial("tcp", os.Getenv(envRedisAddr))
-	}}
+	redisPool, err := config.RedisPool()
+	if err != nil {
+		log.Fatal(err)
+	}
+	maxLen, err := config.Int(envStreamMaxLen, 100000)
+	if err != nil {
+		log.Fatal(err)
+	}
 	username := os.Getenv(envUsername)
 	password := os.Getenv(envPassword)
 	apiUrl := os.Getenv(envApiUrl)
-	tokenRefreshIntervalSecsStr := os.Getenv(envTokenRefreshIntervalSecs)
-	tokenRefreshIntervalSecs, err := strconv.Atoi(tokenRefreshIntervalSecsStr)
+	tokenRefresh, err := config.TokenRefresh()
 	if err != nil {
-		log.Fatalf("invalid %s value: %s", envTokenRefreshIntervalSecs, tokenRefreshIntervalSecsStr)
+		log.Fatal(err)
 	}
-	objectRefreshIntervalSecsStr := os.Getenv(envObjectRefreshIntervalSecs)
-	objectRefreshIntervalSecs, err := strconv.Atoi(objectRefreshIntervalSecsStr)
+	deviceRefresh, err := config.DeviceRefresh()
 	if err != nil {
-		log.Fatalf("invalid %s value: %s", envObjectRefreshIntervalSecs, objectRefreshIntervalSecsStr)
+		log.Fatal(err)
 	}
 	conn, err := api.Dial(apiUrl)
 	if err != nil {
 		log.Fatalf("failed to set up connection to %s: %s", apiUrl, err)
 	}
 	defer conn.Close()
-	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, username, password, time.Duration(tokenRefreshIntervalSecs)*time.Second))
+	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, username, password, tokenRefresh))
 
 	wrappers.NewObjectManager(
 		apiHandler,
 		(&objectWorkerFactory{
-			api:   apiHandler,
-			redis: redisPool,
+			api:    apiHandler,
+			redis:  redisPool,
+			maxLen: maxLen,
 		}).NewObjectWorker,
-		time.Duration(objectRefreshIntervalSecs)*time.Second,
+		deviceRefresh,
 	).Start()
 }
 
 type objectWorkerFactory struct {
-	api   api.Handler
-	redis *redis.Pool
+	api    api.Handler
+	redis  *redis.Pool
+	maxLen int
 }
 
 func (f *objectWorkerFactory) NewObjectWorker(obj api.Object) wrappers.Process {
 	return &objectWorker{
-		obj:   obj,
-		api:   f.api,
-		redis: f.redis,
-		done:  make(chan struct{}),
+		obj:    obj,
+		api:    f.api,
+		redis:  f.redis,
+		maxLen: f.maxLen,
+		done:   make(chan struct{}),
 	}
 }
 
 type objectWorker struct {
-	obj   api.Object
-	api   api.Handler
-	redis *redis.Pool
-	done  chan struct{}
+	obj    api.Object
+	api    api.Handler
+	redis  *redis.Pool
+	maxLen int
+	done   chan struct{}
 }
 
 func (w *objectWorker) Start() {
@@ -95,12 +99,13 @@ func (w *objectWorker) Start() {
 			objJson, _ := json.Marshal(w.obj)
 			stateJson, _ := json.Marshal(state.Result.ReportedState)
 			conn := w.redis.Get()
-			reply, err := conn.Do("XADD", "objects", "*", "object", string(objJson), "state", string(stateJson))
+			reply, err := conn.Do("XADD", xaddArgs(w.maxLen, string(objJson), string(stateJson))...)
 			conn.Close()
 			if err != nil {
 				log.Printf("failed to stream object: object=%v err=%v\n", w.obj, err)
 			} else {
-				log.Printf("successfully streamed object: object=%v reply=%v\n", w.obj, string(reply.([]byte)))
+				id, _ := redis.String(reply, nil)
+				log.Printf("successfully streamed object: object=%v id=%s\n", w.obj, id)
 			}
 		}
 	}
@@ -108,4 +113,14 @@ func (w *objectWorker) Start() {
 
 func (w *objectWorker) Stop() {
 	close(w.done)
+}
+
+// xaddArgs builds the XADD arguments. With maxLen above 0 the stream is
+// trimmed to about that many entries.
+func xaddArgs(maxLen int, obj, state string) []interface{} {
+	args := []interface{}{"objects"}
+	if maxLen > 0 {
+		args = append(args, "MAXLEN", "~", maxLen)
+	}
+	return append(args, "*", "object", obj, "state", state)
 }

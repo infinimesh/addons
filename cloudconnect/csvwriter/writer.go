@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -29,7 +30,7 @@ func (w *writer) Write(record []string) error {
 		}
 	}
 	wu := writeUntil(tn)
-	f, err := os.Create(w.writeDir + strconv.FormatInt(wu.Unix(), 10) + ".csv")
+	f, err := os.Create(filepath.Join(w.writeDir, strconv.FormatInt(wu.Unix(), 10)+".csv"))
 	if err != nil {
 		return err
 	}

@@ -77,7 +77,11 @@ func loadConfig(env func(string) string) (*config, error) {
 	if c.TokenRefresh, err = secs("TOKEN_REFRESH_INTERVAL_SECS", "3600"); err != nil {
 		return nil, err
 	}
-	if c.DeviceRefresh, err = secs("DEVICE_REFRESH_INTERVAL_SECS", "600"); err != nil {
+	deviceKey := "DEVICE_REFRESH_INTERVAL_SECS"
+	if strings.TrimSpace(env(deviceKey)) == "" && strings.TrimSpace(env("OBJECT_REFRESH_INTERVAL_SECS")) != "" {
+		deviceKey = "OBJECT_REFRESH_INTERVAL_SECS"
+	}
+	if c.DeviceRefresh, err = secs(deviceKey, "600"); err != nil {
 		return nil, err
 	}
 	flag := func(key string, def bool) (bool, error) {

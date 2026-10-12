@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,12 +23,12 @@ func main() {
 	svc := s3.NewFromConfig(cfg)
 	// The bucket may already exist, so an error here is not fatal.
 	_, _ = svc.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucketName)})
-	csvprocessor.WalkLoop(csvprocessor.WalkFunc(func(f *os.File) error {
+	csvprocessor.WalkLoop(func(f *os.File, name string) error {
 		_, err := svc.PutObject(ctx, &s3.PutObjectInput{
 			Bucket: aws.String(bucketName),
-			Key:    aws.String(filepath.Base(f.Name())),
+			Key:    aws.String(name),
 			Body:   f,
 		})
 		return err
-	}))
+	})
 }

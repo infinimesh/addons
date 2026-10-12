@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/infinimesh/addons/cloudconnect/csvprocessor"
@@ -31,8 +30,8 @@ func main() {
 	ctx := context.Background()
 	// The container may already exist, so an error here is not fatal.
 	_, _ = client.CreateContainer(ctx, containerName, nil)
-	csvprocessor.WalkLoop(csvprocessor.WalkFunc(func(f *os.File) error {
-		_, err := client.UploadFile(ctx, containerName, filepath.Base(f.Name()), f, nil)
+	csvprocessor.WalkLoop(func(f *os.File, name string) error {
+		_, err := client.UploadFile(ctx, containerName, name, f, nil)
 		return err
-	}))
+	})
 }

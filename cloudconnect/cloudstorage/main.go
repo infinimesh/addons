@@ -24,10 +24,13 @@ func main() {
 		log.Fatal(err)
 	}
 	_ = c.Bucket(bucketName).Create(ctx, os.Getenv(envGcpProjectID), nil)
-	csvprocessor.WalkLoop(csvprocessor.WalkFunc(func(f *os.File) error {
-		w := c.Bucket(bucketName).Object(f.Name()).NewWriter(context.Background())
-		defer w.Close()
-		_, err := io.Copy(w, f)
-		return err
-	}))
+	csvprocessor.WalkLoop(func(f *os.File, name string) error {
+		w := c.Bucket(bucketName).Object(name).NewWriter(ctx)
+		if _, err := io.Copy(w, f); err != nil {
+			_ = w.Close()
+			return err
+		}
+		// the upload only finishes on Close, so its error decides if the file is deleted
+		return w.Close()
+	})
 }

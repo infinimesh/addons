@@ -15,7 +15,7 @@ f3913526-38d9-4bf2-a60d-b616d6ec8dcc,pump-7,device,2026-10-12T08:19:51.617Z,,"{"
 
 The columns are device id, name, kind, timestamp, version and the data as JSON. There is no header line, and `version` is always empty.
 
-The uploaders look at the spool every 5 seconds. They upload each file that has not changed for one minute, and delete it once the upload works.
+The uploaders look at the spool every 5 seconds. They upload each file that has not changed for one minute, under its path below the spool folder, for example `<device uid>/1791792480.csv`. The local file is deleted only once the upload works. A failed upload is tried again on the next pass.
 
 ## Settings
 
@@ -25,9 +25,9 @@ The uploaders look at the spool every 5 seconds. They upload each file that has 
 |---|---|---|
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
-| `TOKEN_REFRESH_INTERVAL_SECS` | none, required | how often to log in again |
-| `OBJECT_REFRESH_INTERVAL_SECS` | none, required | how often to look for new or removed devices |
-| `WRITE_DIR` | | spool folder. It must end with `/`. |
+| `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
+| `WRITE_DIR` | | spool folder |
 
 All uploaders:
 
@@ -59,9 +59,7 @@ All uploaders:
 
 ## Limits
 
-- `s3` and `blob` name each upload by its file name only, without the device folder. Files of two devices from the same minute get the same name, and the second upload replaces the first.
-- `cloudstorage` names each upload by its full spool path, for example `/data/<device uid>/1791792480.csv`.
-- `cloudstorage` does not check the error when it closes an upload, so a failed upload can still delete the local file.
+- Only reported state is written.
 - Not tested live. `csvwriter` uses the same SDK calls as `timeseries`, which was tested against core. The S3, Google Cloud Storage and Azure uploads have not been tried against real accounts.
 
 ## Run
@@ -70,6 +68,6 @@ All uploaders:
 docker compose -f cloudconnect/docker-compose.yml up --build
 ```
 
-The compose file starts `csvwriter` and all three uploaders on a shared `./data` folder. Delete the uploaders you do not need. Set `USERNAME`, `PASSWORD`, `API_URL` and the cloud values first. For `cloudstorage`, change `CHANGEME.json` to `./your-key.json`. Without the `./`, Compose treats it as a named volume and not as a file.
+The compose file starts `csvwriter` and all three uploaders on a shared `./data` folder. Delete the uploaders you do not need. Set `USERNAME`, `PASSWORD`, `API_URL` and the cloud values first. For `cloudstorage`, put your key file next to the compose file and change `./CHANGEME.json` to its name. Keep the `./`, or Compose treats it as a named volume and not as a file.
 
 Apache-2.0.

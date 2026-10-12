@@ -18,15 +18,18 @@ state:  {"version": "", "timestamp": "2026-10-12T08:19:51.617Z", "data": {"temp"
 |---|---|---|
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
-| `TOKEN_REFRESH_INTERVAL_SECS` | none, required | how often to log in again |
-| `OBJECT_REFRESH_INTERVAL_SECS` | none, required | how often to look for new or removed devices |
+| `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `REDIS_ADDR` | | Redis `host:port` |
+| `REDIS_PASSWORD` | | Redis password |
+| `REDIS_TLS` | `false` | connect to Redis with TLS |
+| `REDIS_TLS_INSECURE` | `false` | skip the Redis certificate check, for test setups only |
+| `REDIS_STREAM_MAXLEN` | `100000` | trim the stream to about this many entries. `0` turns trimming off. |
 
 ## Limits
 
 - Only reported state is sent. Desired and connection state are not.
-- The stream is never trimmed, so it grows until you trim it yourself, for example with `XTRIM objects MAXLEN ~ 100000`.
-- The Redis connection has no password or TLS setting.
+- Trimming is approximate (`MAXLEN ~`), so the stream can be a bit longer than `REDIS_STREAM_MAXLEN`. Entries that sinks have not read yet can be trimmed away if they fall far behind.
 - `version` is always empty, because the core v3 shadow has no version.
 - Not tested live. It uses the same SDK calls as `timeseries`, which was tested against core.
 

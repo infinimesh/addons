@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/SAP/go-hdb/driver"
-	"github.com/gomodule/redigo/redis"
+	"github.com/infinimesh/addons/sdk/config"
 	"github.com/infinimesh/addons/sdk/stream/consumer"
 )
 
@@ -20,38 +19,48 @@ const (
 	envSapHanaPassword = "SAPHANA_PASSWORD"
 	envSapHanaHost     = "SAPHANA_HOST"
 	envSapHanaPort     = "SAPHANA_PORT"
-	envRedisAddr       = "REDIS_ADDR"
+	envSapHanaTLS      = "SAPHANA_TLS"
+)
+
+const (
+	tableExistsStmt = `SELECT COUNT(*) FROM SYS.TABLES WHERE SCHEMA_NAME = CURRENT_SCHEMA AND TABLE_NAME = 'DEVICES'`
+	createTableStmt = `CREATE TABLE devices (uid NVARCHAR(1000), timestamp TIMESTAMP, version NVARCHAR(1000), data NCLOB, PRIMARY KEY (uid, timestamp))`
+	insertStmt      = `INSERT INTO devices (uid, timestamp, version, data) VALUES (?, ?, ?, ?)`
 )
 
 func main() {
+	useTLS, err := config.Bool(envSapHanaTLS, true)
+	if err != nil {
+		log.Fatal(err)
+	}
 	db := newSapHanaDB(
 		os.Getenv(envSapHanaHost),
 		os.Getenv(envSapHanaPort),
 		os.Getenv(envSapHanaUsername),
 		os.Getenv(envSapHanaPassword),
+		useTLS,
 	)
-	shouldInitDB, _ := strconv.ParseBool(os.Getenv(envSapHanaInitDB))
+	shouldInitDB, err := config.Bool(envSapHanaInitDB, false)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if shouldInitDB {
 		if err := initDB(db); err != nil {
-			log.Printf("failed to initialise db: err=%v\n", err)
+			log.Fatalf("failed to initialise db: err=%v\n", err)
 		}
 	}
-	redisPool := &redis.Pool{Dial: func() (redis.Conn, error) {
-		return redis.Dial("tcp", os.Getenv(envRedisAddr))
-	}}
-	c := consumer.New(redisPool)
-	for event := range c.Consume() {
-		if event == nil {
-			log.Println("received nil event")
-			continue
-		}
-		err := insertDeviceEvent(db, event)
-		if err != nil {
+	redisPool, err := config.RedisPool()
+	if err != nil {
+		log.Fatal(err)
+	}
+	consumer.New(redisPool).Run(func(event *consumer.DeviceEvent) error {
+		if err := insertDeviceEvent(db, event); err != nil {
 			log.Printf("failed to insert event to SAP HANA: err=%v", err)
-		} else {
-			log.Println("inserted event to SAP HANA:", event)
+			return err
 		}
-	}
+		log.Println("inserted event to SAP HANA:", event)
+		return nil
+	})
 }
 
 // for some reason, connecting to the db via connection string as mentioned in
@@ -59,34 +68,45 @@ func main() {
 // alternative connection method
 //
 // also see https://stackoverflow.com/questions/58698188
-func newSapHanaDB(host, port, username, password string) *sql.DB {
+func newSapHanaDB(host, port, username, password string, useTLS bool) *sql.DB {
 	c := driver.NewBasicAuthConnector(host+":"+port, username, password)
-	tlsConfig := tls.Config{
-		InsecureSkipVerify: false,
-		ServerName:         host,
+	if useTLS {
+		c.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: host})
 	}
-	c.SetTLSConfig(&tlsConfig)
 	return sql.OpenDB(c)
 }
 
-// initDB initialises the required relations in SAP HANA for storage
+// initDB creates the devices table when it does not exist yet.
 //
 // ideally we would want to use the SAP HANA JSON Docstore, but the cloud
-// offering doesn't support it as of time of writing. Here we opt for an
-// alternative where we store retrieved data as a JSON string in a table
+// offering didn't support it when this was written. Here we store the data
+// as a JSON string in an NCLOB column.
 //
 // also see https://answers.sap.com/questions/13207475/
 func initDB(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE devices (uid varchar(1000), timestamp timestamp, version varchar(1000), data varchar(5000), PRIMARY KEY (uid, timestamp));`)
+	var n int
+	if err := db.QueryRow(tableExistsStmt).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		log.Println("table devices already exists")
+		return nil
+	}
+	_, err := db.Exec(createTableStmt)
 	return err
 }
 
 func insertDeviceEvent(db *sql.DB, event *consumer.DeviceEvent) error {
 	t, err := time.Parse(time.RFC3339Nano, event.State.Timestamp)
 	if err != nil {
+		// a bad timestamp will not get better on retry, so drop the event
+		log.Printf("skipping event with bad timestamp %q: %v", event.State.Timestamp, err)
+		return nil
+	}
+	jsonData, err := json.Marshal(event.State.Data)
+	if err != nil {
 		return err
 	}
-	jsonData, _ := json.Marshal(event.State.Data)
-	_, err = db.Exec("INSERT INTO devices (uid, timestamp, version, data) VALUES (?, ?, ?, ?)", event.Object.UID, t, event.State.Version, string(jsonData))
+	_, err = db.Exec(insertStmt, event.Object.UID, t, event.State.Version, string(jsonData))
 	return err
 }

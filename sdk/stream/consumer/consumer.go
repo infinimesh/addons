@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"runtime/debug"
@@ -9,6 +10,12 @@ import (
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/infinimesh/addons/sdk/api"
+	"github.com/infinimesh/addons/sdk/config"
+)
+
+const (
+	streamName = "objects"
+	groupName  = "group"
 )
 
 type RedisStreamEvent struct {
@@ -21,73 +28,106 @@ type DeviceEvent struct {
 	State  api.DeviceState
 }
 
+// Handler writes one event to a sink. An entry is acknowledged only when the
+// handler returns nil, so a failed entry is read again later.
+type Handler func(*DeviceEvent) error
+
 type Consumer interface {
-	Consume() <-chan *DeviceEvent
+	Run(h Handler)
 }
 
 type consumerImpl struct {
-	redis *redis.Pool
-	name  string
+	redis   *redis.Pool
+	name    string
+	startID string
 }
 
+// New returns a consumer of the stream "objects" in the group "group".
+//
+// REDIS_STREAM_START_ID sets where the group starts when it is first created:
+// "$" (the default) for new entries only, or "0" for the whole stream.
 func New(pool *redis.Pool) Consumer {
 	hn, _ := os.Hostname()
 	return &consumerImpl{
-		redis: pool,
-		name:  hn,
+		redis:   pool,
+		name:    hn,
+		startID: config.String("REDIS_STREAM_START_ID", "$"),
 	}
 }
 
-func (i *consumerImpl) Consume() <-chan *DeviceEvent {
-	ret := make(chan *DeviceEvent)
-	go func() {
-		for {
-			shouldCooldown := i.loop(ret)
-			if shouldCooldown {
-				time.Sleep(time.Second)
-			}
+// Run reads the stream forever. It first works through entries this consumer
+// read before but did not acknowledge, then reads new ones.
+func (i *consumerImpl) Run(h Handler) {
+	pending := true
+	for {
+		id := ">"
+		if pending {
+			id = "0"
 		}
-	}()
-	return ret
+		n, failed, err := i.loop(id, h)
+		if err != nil {
+			log.Printf("error on XREADGROUP: %v\n", err)
+			// XREADGROUP fails when the group does not exist yet
+			i.createGroupIfNotExists()
+			time.Sleep(time.Second)
+			continue
+		}
+		switch {
+		case failed > 0:
+			// keep retrying the pending entries, but not in a tight loop
+			pending = true
+			time.Sleep(time.Second)
+		case pending && n == 0:
+			pending = false
+		case !pending && n == 0:
+			time.Sleep(time.Second)
+		}
+	}
 }
 
-func (i *consumerImpl) loop(ch chan<- *DeviceEvent) bool {
+func (i *consumerImpl) loop(id string, h Handler) (n, failed int, err error) {
 	conn := i.redis.Get()
 	defer conn.Close()
-	reply, err := conn.Do("XREADGROUP", "GROUP", "group", i.name, "STREAMS", "objects", ">")
+	reply, err := conn.Do("XREADGROUP", "GROUP", groupName, i.name, "COUNT", 100, "STREAMS", streamName, id)
 	if err != nil {
-		log.Printf("error on XREADGROUP: %v\n", err)
-		// XREADGROUP errors if the consumer group does not yet exist in the
-		// stream. Most of the time however, the consumer group should have
-		// already been created, thus this is usually not a problem. Placing
-		// the group creation here feels more self-healing and slightly more
-		// efficient than creating the group prior to consuming from the stream
-		i.createGroupIfNotExists()
-		return true
+		return 0, 0, err
 	}
 	if reply == nil {
-		return true
+		return 0, 0, nil
 	}
-	events := parseReply(reply)
-	for _, e := range events {
-		if _, err := conn.Do("XACK", "objects", "group", e.ID); err != nil {
-			log.Printf("error on XACK: %v\n", err)
+	for _, e := range parseReply(reply) {
+		n++
+		if e.DeviceEvent == nil {
+			// unreadable entry, acknowledge it so it does not block the stream
+			ack(conn, e.ID)
+			continue
 		}
-		ch <- e.DeviceEvent
+		if err := h(e.DeviceEvent); err != nil {
+			log.Printf("sink write failed for entry %s, will retry: %v\n", e.ID, err)
+			failed++
+			continue
+		}
+		ack(conn, e.ID)
 	}
-	return false
+	return n, failed, nil
+}
+
+func ack(conn redis.Conn, id string) {
+	if _, err := conn.Do("XACK", streamName, groupName, id); err != nil {
+		log.Printf("error on XACK: %v\n", err)
+	}
 }
 
 func (i *consumerImpl) createGroupIfNotExists() {
 	conn := i.redis.Get()
 	defer conn.Close()
-	_, err := conn.Do("XGROUP", "CREATE", "objects", "group", "$", "MKSTREAM")
+	_, err := conn.Do("XGROUP", "CREATE", streamName, groupName, i.startID, "MKSTREAM")
 	if err != nil {
 		log.Printf("error on XGROUP CREATE: %v\n", err)
 	}
 }
 
-func parseReply(reply interface{}) []RedisStreamEvent {
+func parseReply(reply interface{}) (ret []RedisStreamEvent) {
 	defer func() {
 		if err := recover(); err != nil {
 			log.Printf("unexpected error when parsing reply: %v\n", err)
@@ -95,7 +135,6 @@ func parseReply(reply interface{}) []RedisStreamEvent {
 		}
 	}()
 
-	ret := []RedisStreamEvent{}
 	streamAndEventss := reply.([]interface{})
 	for _, se := range streamAndEventss {
 		streamAndEvents := se.([]interface{})
@@ -103,7 +142,10 @@ func parseReply(reply interface{}) []RedisStreamEvent {
 		for _, e := range events {
 			event := e.([]interface{})
 			eventID := string(event[0].([]byte))
-			eventData := event[1].([]interface{})
+			var eventData []interface{}
+			if event[1] != nil {
+				eventData = event[1].([]interface{})
+			}
 			ret = append(ret, RedisStreamEvent{
 				ID:          eventID,
 				DeviceEvent: parseEventData(eventData),
@@ -118,28 +160,26 @@ func parseEventData(eventData []interface{}) *DeviceEvent {
 		return nil
 	}
 	ret := &DeviceEvent{}
-	for i := 0; i < len(eventData); i += 2 {
+	for i := 0; i+1 < len(eventData); i += 2 {
 		k := string(eventData[i].([]byte))
 		v := eventData[i+1].([]byte)
 		switch k {
 		case "object":
-			obj := api.Object{}
-			err := json.Unmarshal(v, &obj)
-			if err != nil {
+			if err := json.Unmarshal(v, &ret.Object); err != nil {
 				log.Printf("unexpected error when unmarshaling object: %v\n", err)
-				continue
 			}
-			ret.Object = obj
 		case "state":
-			state := api.DeviceState{}
-			err := json.Unmarshal(v, &state)
-			if err != nil {
-				log.Printf("unexpected error when unmarshaling object: %v\n", err)
+			if err := json.Unmarshal(v, &ret.State); err != nil {
+				log.Printf("unexpected error when unmarshaling state: %v\n", err)
 			}
-			ret.State = state
 		default:
 			log.Printf("unexpected key when parsing event data: %v\n", k)
 		}
 	}
 	return ret
+}
+
+// String is used in logs.
+func (e *DeviceEvent) String() string {
+	return fmt.Sprintf("device=%s timestamp=%s", e.Object.UID, e.State.Timestamp)
 }
