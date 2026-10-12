@@ -1,13 +1,14 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io/ioutil"
 	"log"
-	"net/http"
+	"sync"
 	"time"
+
+	pb "github.com/infinimesh/proto/node"
+	accpb "github.com/infinimesh/proto/node/accounts"
+	"google.golang.org/grpc"
 )
 
 type TokenHandler interface {
@@ -16,25 +17,25 @@ type TokenHandler interface {
 }
 
 type tokenHandlerImpl struct {
-	client    *http.Client
+	mu        sync.RWMutex
+	client    pb.AccountsServiceClient
 	username  string
 	password  string
-	apiUrl    string
 	lastToken string
 }
 
-// NewTokenHandler returns a new TokenHandler
+// NewTokenHandler returns a new TokenHandler that logs in with a standard
+// infinimesh account (AccountsService.Token).
 //
 // Tokens are synchronously retrieved on init, and refreshed automatically per
 // tick duration
 //
 // If a token retrieval attempt fails, GetToken returns the previous token
-func NewTokenHandler(username, password, apiUrl string, refreshInterval time.Duration) TokenHandler {
+func NewTokenHandler(conn grpc.ClientConnInterface, username, password string, refreshInterval time.Duration) TokenHandler {
 	h := &tokenHandlerImpl{
-		client:   &http.Client{},
+		client:   pb.NewAccountsServiceClient(conn),
 		username: username,
 		password: password,
-		apiUrl:   apiUrl,
 	}
 	if err := h.RefreshToken(); err != nil {
 		log.Printf("error retrieving token: %s\n", err)
@@ -49,41 +50,24 @@ func NewTokenHandler(username, password, apiUrl string, refreshInterval time.Dur
 	return h
 }
 
-type tokenParams struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type tokenRes struct {
-	Token string `json:"token"`
-}
-
 func (h *tokenHandlerImpl) RefreshToken() error {
 	log.Println("refreshing account token...")
-	b, _ := json.Marshal(tokenParams{
-		Username: h.username,
-		Password: h.password,
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := h.client.Token(ctx, &pb.TokenRequest{
+		Auth: &accpb.Credentials{Type: "standard", Data: []string{h.username, h.password}},
 	})
-
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, h.apiUrl+endpointAccountToken, bytes.NewBuffer(b))
-	req.Header.Add("Content-Type", "application/json")
-
-	res, err := h.client.Do(req)
 	if err != nil {
-		return NewFailedHTTPRequestError(http.MethodPost, endpointAccountToken, err)
+		return NewFailedRequestError("AccountsService.Token", err)
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return NewUnexpectedHTTPStatusCodeError(http.MethodPost, endpointAccountToken, res.StatusCode)
-	}
-
-	b, _ = ioutil.ReadAll(res.Body)
-	tmp := tokenRes{}
-	_ = json.Unmarshal(b, &tmp)
-	h.lastToken = tmp.Token
+	h.mu.Lock()
+	h.lastToken = res.GetToken()
+	h.mu.Unlock()
 	return nil
 }
 
 func (h *tokenHandlerImpl) GetToken() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return h.lastToken
 }
