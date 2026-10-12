@@ -2,7 +2,7 @@
 
 Packages under `github.com/infinimesh/addons/sdk`.
 
-- `api` — token and object API
+- `api` — token, object API, and `GET /v1/devices/states/stream`
 - `wrappers` — object iteration
 - `stream/consumer` — Redis stream of device events
 

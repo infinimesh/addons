@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -107,19 +109,43 @@ type DeviceState struct {
 	Data      map[string]interface{} `json:"data"`
 }
 
+func shadowStreamMessage(raw []byte) (*DevicesStateRes, bool) {
+	var env struct {
+		Result struct {
+			Reported *struct {
+				Data      map[string]interface{} `json:"data"`
+				Timestamp string                 `json:"timestamp"`
+				Version   uint64                 `json:"version"`
+			} `json:"reported"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil || env.Result.Reported == nil {
+		return nil, false
+	}
+	return &DevicesStateRes{
+		Result: DevicesStateResult{
+			ReportedState: DeviceState{
+				Version:   strconv.FormatUint(env.Result.Reported.Version, 10),
+				Timestamp: env.Result.Reported.Timestamp,
+				Data:      env.Result.Reported.Data,
+			},
+		},
+	}, true
+}
+
 func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error) {
 	ret := make(chan *DevicesStateRes)
 	go func() {
 		for {
-			url := fmt.Sprintf(endpointDevicesStateStream, deviceID) + "?only_delta=false"
-			res, err := h.authRequest(context.Background(), http.MethodGet, url, nil)
+			path := fmt.Sprintf(endpointDevicesStateStream, url.QueryEscape(deviceID))
+			res, err := h.authRequest(context.Background(), http.MethodGet, path, nil)
 			if err != nil {
-				log.Println(NewFailedHTTPRequestError(http.MethodGet, url, err))
+				log.Println(NewFailedHTTPRequestError(http.MethodGet, path, err))
 				time.Sleep(time.Second)
 				continue
 			}
 			if res.StatusCode != http.StatusOK {
-				log.Println(NewUnexpectedHTTPStatusCodeError(http.MethodGet, url, res.StatusCode))
+				log.Println(NewUnexpectedHTTPStatusCodeError(http.MethodGet, path, res.StatusCode))
 				time.Sleep(time.Second)
 				continue
 			}
@@ -128,10 +154,9 @@ func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesSta
 			for {
 				l, err := rdr.Read(buf)
 				if l > 0 {
-					b := buf[:l]
-					tmp := &DevicesStateRes{}
-					_ = json.Unmarshal(b, tmp)
-					ret <- tmp
+					if msg, ok := shadowStreamMessage(buf[:l]); ok {
+						ret <- msg
+					}
 				}
 				if err != nil {
 					res.Body.Close()
