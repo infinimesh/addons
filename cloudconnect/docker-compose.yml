@@ -1,9 +1,7 @@
-version: "3.8"
-
 services:
   csvwriter:
     build:
-      context: ...
+      context: ..
       dockerfile: cloudconnect/csvwriter/Dockerfile
     environment:
       - USERNAME=CHANGEME
@@ -11,7 +9,6 @@ services:
       - API_URL=https://api.example.com
       - TOKEN_REFRESH_INTERVAL_SECS=3600
       - OBJECT_REFRESH_INTERVAL_SECS=600
-      - REDIS_ADDR=redis:6379
       - WRITE_DIR=/data/
     restart: on-failure
     volumes:
@@ -19,7 +16,7 @@ services:
   # s3writer writes to aws s3 - delete this service if unneeded
   s3writer:
     build:
-      context: ...
+      context: ..
       dockerfile: cloudconnect/s3/Dockerfile
     environment:
       - READ_DIR=/data/
@@ -32,7 +29,7 @@ services:
   # cloudstoragewriter writes to gcp cloud storage - delete this service if unneeded
   cloudstoragewriter:
     build:
-      context: ...
+      context: ..
       dockerfile: cloudconnect/cloudstorage/Dockerfile
     environment:
       - READ_DIR=/data/
@@ -45,7 +42,7 @@ services:
   # blobwriter writes to azure blob - delete this service if unneeded
   blobwriter:
     build:
-      context: ...
+      context: ..
       dockerfile: cloudconnect/blob/Dockerfile
     environment:
       - READ_DIR=/data/

@@ -12,14 +12,14 @@ services:
       - REDIS_ADDR=redis:6379
     restart: on-failure
   redis:
-    image: redislabs/redistimeseries:1.4.7
+    image: redis/redis-stack-server:7.4.0-v6
     ports:
       - "6379:6379"
   grafana:
-    image: grafana/grafana:7.3.4
+    image: grafana/grafana:12.2.0
     ports:
       - "3000:3000"
     volumes:
       - ./provisioning:/etc/grafana/provisioning
     environment:
-      - GF_INSTALL_PLUGINS=redis-datasource
+      - GF_PLUGINS_PREINSTALL=redis-datasource
