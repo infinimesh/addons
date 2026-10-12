@@ -6,27 +6,27 @@ Apache-2.0.
 
 ## Layout
 
-| Directory | What it does |
+| Addon | What it does |
 |---|---|
-| `sdk` | API client, object iteration, Redis stream consumer |
-| `redisstream` | Read the platform API and publish device events on Redis |
-| `elasticsearch` | Redis stream to the Elasticsearch index `infinimesh` |
-| `snowflake` | Redis stream to Snowflake database `infinimesh`, table `device_states` |
-| `saphana` | Redis stream to SAP HANA |
-| `timeseries` | Platform API to RedisTimeSeries, with a Grafana compose file |
-| `cloudconnect` | Platform API to a CSV spool, then S3, GCS, or Azure Blob |
-| `kafka` | Platform API to a Kafka or KafScale topic, JSON keyed by device id |
+| [`timeseries`](timeseries/README.md) | API to RedisTimeSeries, with Grafana |
+| [`kafka`](kafka/README.md) | API to a Kafka or KafScale topic, JSON keyed by device id |
+| [`cloudconnect`](cloudconnect/README.md) | API to CSV files, then S3, Google Cloud Storage or Azure Blob |
+| [`redisstream`](redisstream/README.md) | API to the Redis stream `objects`, read by the sinks below |
+| [`elasticsearch`](elasticsearch/README.md) | Redis stream to the Elasticsearch index `infinimesh` |
+| [`snowflake`](snowflake/README.md) | Redis stream to the Snowflake table `infinimesh.device_states` |
+| [`saphana`](saphana/README.md) | Redis stream to the SAP HANA table `devices` |
 
-Sinks (`elasticsearch`, `snowflake`, `saphana`) consume the stream from `redisstream`. `timeseries`, `cloudconnect` and `kafka` call the API themselves.
+[`sdk`](sdk/README.md) holds the shared API client, the device worker manager and the Redis stream consumer.
 
 ## Run
 
 From this repository, with `API_URL` pointing at a running platform:
 
 ```bash
-docker compose -f redisstream/docker-compose.yml up --build
-docker compose -f elasticsearch/docker-compose.yml up --build
+docker compose -f timeseries/docker-compose.yml up --build
 ```
+
+The sink compose files (`elasticsearch`, `snowflake`, `saphana`) already start `redisstream`, so you do not run it on its own as well.
 
 Each compose file's build context is the repository root. Set `USERNAME`, `PASSWORD`, and `API_URL` in that file. Placeholders are `CHANGEME` and `https://api.example.com`.
 
