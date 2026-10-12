@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/infinimesh/addons/sdk/api"
+	"github.com/infinimesh/addons/sdk/message"
 	"github.com/infinimesh/addons/sdk/wrappers"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -91,7 +92,7 @@ func (w *worker) Start() {
 		case <-w.done:
 			return
 		case s := <-ch:
-			key, value, ok := buildMessage(w.obj, s, w.f.cfg.OnlyReported, time.Now())
+			key, value, ok := message.Build(w.obj, s, w.f.cfg.OnlyReported, time.Now())
 			if !ok {
 				continue
 			}
