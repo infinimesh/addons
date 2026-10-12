@@ -11,7 +11,7 @@ import (
 
 	"github.com/infinimesh/addons/sdk/config"
 	"github.com/infinimesh/addons/sdk/stream/consumer"
-	sf "github.com/snowflakedb/gosnowflake"
+	sf "github.com/snowflakedb/gosnowflake/v2"
 )
 
 const (
