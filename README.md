@@ -31,6 +31,10 @@ Each compose file's build context is the repository root. Set `USERNAME`, `PASSW
 
 `SNOWFLAKE_INITDB=true` creates the Snowflake database and table. Cloud Connect commands are `cloudconnect/csvwriter`, `s3`, `cloudstorage`, and `blob`.
 
+## Checks
+
+`make commit-check` runs `fmt`, `race`, `test-fuzz`, and `code-ql-gate`. `fmt` writes Go files that `gofmt` would change. `code-ql` runs the CodeQL CLI and writes SARIF under `.tmp/codeql/`. The gate fails when a result is level `error`, ignoring paths under `vendor`. `jq` is required. GitHub Actions runs the same race and fuzz steps, and CodeQL on pull requests.
+
 ## Build
 
 ```bash
