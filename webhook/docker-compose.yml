@@ -1,0 +1,12 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: webhook/Dockerfile
+    environment:
+      - USERNAME=CHANGEME
+      - PASSWORD=CHANGEME
+      - API_URL=https://api.example.com
+      - WEBHOOK_URL=https://hooks.example.com/infinimesh
+      - WEBHOOK_SECRET=CHANGEME
+    restart: on-failure

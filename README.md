@@ -10,13 +10,14 @@ Apache-2.0.
 |---|---|
 | [`timeseries`](timeseries/README.md) | API to RedisTimeSeries, with Grafana |
 | [`kafka`](kafka/README.md) | API to a Kafka or KafScale topic, JSON keyed by device id |
+| [`webhook`](webhook/README.md) | API to an HTTP endpoint, one signed JSON POST per shadow update |
 | [`cloudconnect`](cloudconnect/README.md) | API to CSV files, then S3, Google Cloud Storage or Azure Blob |
 | [`redisstream`](redisstream/README.md) | API to the Redis stream `objects`, read by the sinks below |
 | [`elasticsearch`](elasticsearch/README.md) | Redis stream to the Elasticsearch index `infinimesh` |
 | [`snowflake`](snowflake/README.md) | Redis stream to the Snowflake table `infinimesh.device_states` |
 | [`saphana`](saphana/README.md) | Redis stream to the SAP HANA table `devices` |
 
-[`sdk`](sdk/README.md) holds the shared API client, the device worker manager and the Redis stream consumer.
+[`sdk`](sdk/README.md) holds the shared API client, the device worker manager, the shadow runner and JSON message used by `kafka` and `webhook`, and the Redis stream consumer.
 
 ## Run
 

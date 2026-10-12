@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/infinimesh/addons/sdk/api"
+	"github.com/infinimesh/addons/sdk/message"
 	shadowpb "github.com/infinimesh/proto/shadow"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -48,27 +49,27 @@ func TestBuildMessage(t *testing.T) {
 	data, _ := structpb.NewStruct(map[string]interface{}{"temp": 21.5})
 	obj := api.Object{UID: "d1", Name: "pump"}
 	s := &shadowpb.Shadow{Device: "d1", Reported: &shadowpb.State{Data: data}, Connection: &shadowpb.ConnectionState{Connected: true}}
-	key, value, ok := buildMessage(obj, s, false, time.Unix(0, 0))
+	key, value, ok := message.Build(obj, s, false, time.Unix(0, 0))
 	if !ok || string(key) != "d1" {
 		t.Fatalf("key = %q ok = %v", key, ok)
 	}
-	var m Message
+	var m message.Message
 	if err := json.Unmarshal(value, &m); err != nil {
 		t.Fatal(err)
 	}
 	if m.Reported.Data["temp"] != 21.5 || m.Connection == nil || !m.Connection.Connected || m.Title != "pump" {
 		t.Errorf("message = %s", value)
 	}
-	_, value, ok = buildMessage(obj, s, true, time.Unix(0, 0))
+	_, value, ok = message.Build(obj, s, true, time.Unix(0, 0))
 	if !ok {
 		t.Fatal("want message")
 	}
-	m = Message{}
+	m = message.Message{}
 	_ = json.Unmarshal(value, &m)
 	if m.Connection != nil {
 		t.Error("KAFKA_ONLY_REPORTED should drop connection state")
 	}
-	if _, _, ok := buildMessage(obj, &shadowpb.Shadow{Device: "d1"}, false, time.Now()); ok {
+	if _, _, ok := message.Build(obj, &shadowpb.Shadow{Device: "d1"}, false, time.Now()); ok {
 		t.Error("empty shadow should not be sent")
 	}
 }

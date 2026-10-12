@@ -1,4 +1,4 @@
-package main
+package message
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Message is the JSON value written to Kafka. The record key is the device id.
+// Message is the JSON form of one shadow update that the addons send.
 type Message struct {
 	Device     string      `json:"device"`
 	Title      string      `json:"title,omitempty"`
@@ -44,9 +44,9 @@ func state(s *shadowpb.State) *State {
 	return &State{Timestamp: ts(s.GetTimestamp()), Data: s.GetData().AsMap()}
 }
 
-// buildMessage turns a shadow update into a Kafka key and value.
+// Build turns a shadow update into a key (the device id) and a JSON value.
 // ok is false when there is nothing to send.
-func buildMessage(obj api.Object, s *shadowpb.Shadow, onlyReported bool, now time.Time) (key, value []byte, ok bool) {
+func Build(obj api.Object, s *shadowpb.Shadow, onlyReported bool, now time.Time) (key, value []byte, ok bool) {
 	m := Message{
 		Device:   obj.UID,
 		Title:    obj.Name,
