@@ -39,6 +39,7 @@ Parts that are not in the update are left out.
 | `KAFKA_SASL_MECHANISM` | | `PLAIN`, `SCRAM-SHA-256` or `SCRAM-SHA-512` |
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | | SASL login |
 | `KAFKA_IDEMPOTENT` | `false` | idempotent producer. Only for plain Kafka. |
+| `KAFKA_MAX_VERSION` | | cap Kafka request versions at this Kafka version, for example `3.9`. Only for brokers that cannot negotiate newer versions. |
 
 ## KafScale
 
@@ -49,7 +50,7 @@ KafScale speaks the Kafka protocol, so the same settings work. Keep these in min
 - Point `KAFKA_BROKERS` at the KafScale proxy or broker, for example `kafscale-broker:9092`.
 - Writes reach S3 in batches, so expect a few hundred milliseconds before a consumer sees a record.
 
-The addon caps Kafka request versions at Kafka 3.9. KafScale closes the connection when a client opens with a newer handshake, and a producer does not need anything newer.
+KafScale builds before [#177](https://github.com/KafScale/platform/pull/177) close the connection when a client opens with ApiVersions v5. Update KafScale, or set `KAFKA_MAX_VERSION=3.9` for an older build.
 
 ## Run
 

@@ -22,6 +22,9 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if len(c.Brokers) != 2 || c.Brokers[1] != "b:9092" {
 		t.Errorf("brokers = %v", c.Brokers)
 	}
+	if c.MaxVersion != nil {
+		t.Error("no version cap by default")
+	}
 	if c.Topic != "infinimesh.shadows" || c.Idempotent || !c.CreateTopic || c.Partitions != 1 {
 		t.Errorf("unexpected defaults: %+v", c)
 	}
@@ -33,6 +36,7 @@ func TestLoadConfigErrors(t *testing.T) {
 		{"API_URL": "x"},
 		{"API_URL": "x", "KAFKA_BROKERS": "a:9092", "KAFKA_SASL_MECHANISM": "GSSAPI"},
 		{"API_URL": "x", "KAFKA_BROKERS": "a:9092", "KAFKA_TLS": "maybe"},
+		{"API_URL": "x", "KAFKA_BROKERS": "a:9092", "KAFKA_MAX_VERSION": "latest"},
 	} {
 		if _, err := loadConfig(envMap(m)); err == nil {
 			t.Errorf("want error for %v", m)
@@ -66,5 +70,15 @@ func TestBuildMessage(t *testing.T) {
 	}
 	if _, _, ok := buildMessage(obj, &shadowpb.Shadow{Device: "d1"}, false, time.Now()); ok {
 		t.Error("empty shadow should not be sent")
+	}
+}
+
+func TestMaxVersion(t *testing.T) {
+	c, err := loadConfig(envMap(map[string]string{"API_URL": "x", "KAFKA_BROKERS": "a:9092", "KAFKA_MAX_VERSION": "3.9"}))
+	if err != nil || c.MaxVersion == nil {
+		t.Fatalf("cap = %v, err = %v", c, err)
+	}
+	if got := len(c.kafkaOpts()); got != 6 {
+		t.Errorf("opts = %d, want 6 with the cap", got)
 	}
 }
