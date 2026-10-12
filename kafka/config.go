@@ -33,6 +33,7 @@ type config struct {
 	Partitions        int32
 	ReplicationFactor int16
 	OnlyReported      bool
+	MaxVersion        *kversion.Versions
 }
 
 func getenv(env func(string) string, key, def string) string {
@@ -121,6 +122,12 @@ func loadConfig(env func(string) string) (*config, error) {
 	}
 	c.ReplicationFactor = int16(r)
 
+	if v := strings.TrimSpace(env("KAFKA_MAX_VERSION")); v != "" {
+		if c.MaxVersion = kversion.FromString(v); c.MaxVersion == nil {
+			return nil, fmt.Errorf("invalid KAFKA_MAX_VERSION value: %s, use a Kafka version like 3.9", v)
+		}
+	}
+
 	switch c.SASLMechanism {
 	case "", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512":
 	default:
@@ -135,10 +142,11 @@ func (c *config) kafkaOpts() []kgo.Opt {
 		kgo.ClientID(c.ClientID),
 		kgo.DefaultProduceTopic(c.Topic),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
-		// Cap request versions at Kafka 3.9. Newer franz-go sends ApiVersions
-		// v5 first, and KafScale closes the connection instead of answering
-		// with UNSUPPORTED_VERSION. A producer needs nothing from Kafka 4.x.
-		kgo.MaxVersions(kversion.V3_9_0()),
+	}
+	if c.MaxVersion != nil {
+		// Optional cap for brokers that cannot negotiate newer request
+		// versions, for example KafScale before the ApiVersions fix.
+		opts = append(opts, kgo.MaxVersions(c.MaxVersion))
 	}
 	if !c.Idempotent {
 		// KafScale has no InitProducerId, so idempotent writes must be off.
