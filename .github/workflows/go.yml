@@ -27,13 +27,16 @@ jobs:
         run: go mod verify
 
       - name: gofmt
-        run: test -z "$(gofmt -l .)"
+        run: make fmt-check
 
       - name: go vet
         run: go vet ./...
 
-      - name: go test
-        run: go test ./...
+      - name: race
+        run: make race
+
+      - name: fuzz
+        run: make test-fuzz
 
   govulncheck:
     name: govulncheck
