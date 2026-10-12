@@ -15,8 +15,9 @@ Apache-2.0.
 | `saphana` | Redis stream to SAP HANA |
 | `timeseries` | Platform API to RedisTimeSeries, with a Grafana compose file |
 | `cloudconnect` | Platform API to a CSV spool, then S3, GCS, or Azure Blob |
+| `kafka` | Platform API to a Kafka or KafScale topic, JSON keyed by device id |
 
-Sinks (`elasticsearch`, `snowflake`, `saphana`) consume the stream from `redisstream`. `timeseries` and `cloudconnect` call the API themselves.
+Sinks (`elasticsearch`, `snowflake`, `saphana`) consume the stream from `redisstream`. `timeseries`, `cloudconnect` and `kafka` call the API themselves.
 
 ## Run
 
