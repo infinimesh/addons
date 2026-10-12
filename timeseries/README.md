@@ -16,15 +16,17 @@ TS.RANGE temp:f3913526-38d9-4bf2-a60d-b616d6ec8dcc - +
 |---|---|---|
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
-| `TOKEN_REFRESH_INTERVAL_SECS` | none, required | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | none, required | how often to look for new or removed devices |
+| `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `REDIS_ADDR` | | Redis `host:port`. Redis needs the RedisTimeSeries module. |
+| `REDIS_PASSWORD` | | Redis password |
+| `REDIS_TLS` | `false` | connect to Redis with TLS |
+| `REDIS_TLS_INSECURE` | `false` | skip the Redis certificate check, for test setups only |
 
 ## Limits
 
 - Only top level numbers are stored. Strings, booleans and nested objects are logged and skipped.
 - Series are created with no retention, so they keep all points.
-- The Redis connection has no password or TLS setting.
 - `sample-dashboard.json` is not provisioned. Import it in Grafana by hand.
 - Tested live against core: 5 reported states landed as 5 points, with RedisTimeSeries 1.4.7 and with redis-stack-server 7.4.0-v6.
 

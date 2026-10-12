@@ -27,7 +27,7 @@ Parts that are not in the update are left out.
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `KAFKA_BROKERS` | | comma separated `host:port` list |
 | `KAFKA_TOPIC` | `infinimesh.shadows` | target topic |
 | `KAFKA_CLIENT_ID` | `infinimesh-kafka-addon` | Kafka client id. KafScale ACLs use it as the identity. |

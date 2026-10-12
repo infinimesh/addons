@@ -4,42 +4,38 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"strconv"
-	"time"
+	"path/filepath"
 
 	"github.com/infinimesh/addons/sdk/api"
+	"github.com/infinimesh/addons/sdk/config"
 	"github.com/infinimesh/addons/sdk/wrappers"
 )
 
 const (
-	envApiUrl                    = "API_URL"
-	envUsername                  = "USERNAME"
-	envPassword                  = "PASSWORD"
-	envTokenRefreshIntervalSecs  = "TOKEN_REFRESH_INTERVAL_SECS"
-	envObjectRefreshIntervalSecs = "OBJECT_REFRESH_INTERVAL_SECS"
-	envWriteDir                  = "WRITE_DIR"
+	envApiUrl   = "API_URL"
+	envUsername = "USERNAME"
+	envPassword = "PASSWORD"
+	envWriteDir = "WRITE_DIR"
 )
 
 func main() {
 	username := os.Getenv(envUsername)
 	password := os.Getenv(envPassword)
 	apiUrl := os.Getenv(envApiUrl)
-	tokenRefreshIntervalSecsStr := os.Getenv(envTokenRefreshIntervalSecs)
-	tokenRefreshIntervalSecs, err := strconv.Atoi(tokenRefreshIntervalSecsStr)
+	tokenRefresh, err := config.TokenRefresh()
 	if err != nil {
-		log.Fatalf("invalid %s value: %s", envTokenRefreshIntervalSecs, tokenRefreshIntervalSecsStr)
+		log.Fatal(err)
 	}
-	objectRefreshIntervalSecsStr := os.Getenv(envObjectRefreshIntervalSecs)
-	objectRefreshIntervalSecs, err := strconv.Atoi(objectRefreshIntervalSecsStr)
+	deviceRefresh, err := config.DeviceRefresh()
 	if err != nil {
-		log.Fatalf("invalid %s value: %s", envObjectRefreshIntervalSecs, objectRefreshIntervalSecsStr)
+		log.Fatal(err)
 	}
 	conn, err := api.Dial(apiUrl)
 	if err != nil {
 		log.Fatalf("failed to set up connection to %s: %s", apiUrl, err)
 	}
 	defer conn.Close()
-	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, username, password, time.Duration(tokenRefreshIntervalSecs)*time.Second))
+	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, username, password, tokenRefresh))
 	writeDir := os.Getenv(envWriteDir)
 	wrappers.NewObjectManager(
 		apiHandler,
@@ -47,7 +43,7 @@ func main() {
 			api:      apiHandler,
 			writeDir: writeDir,
 		}).NewObjectWorker,
-		time.Duration(objectRefreshIntervalSecs)*time.Second,
+		deviceRefresh,
 	).Start()
 }
 
@@ -60,7 +56,7 @@ func (f *objectWorkerFactory) NewObjectWorker(obj api.Object) wrappers.Process {
 	return &objectWorker{
 		obj:      obj,
 		api:      f.api,
-		writeDir: f.writeDir + obj.UID + "/",
+		writeDir: filepath.Join(f.writeDir, obj.UID),
 		done:     make(chan struct{}),
 	}
 }

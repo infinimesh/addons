@@ -3,32 +3,39 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
-	"strconv"
+	"strings"
 	"time"
 
-	"github.com/gomodule/redigo/redis"
+	"github.com/infinimesh/addons/sdk/config"
 	"github.com/infinimesh/addons/sdk/stream/consumer"
 	sf "github.com/snowflakedb/gosnowflake"
 )
 
 const (
-	envSnowflakeAccount  = "SNOWFLAKE_ACCOUNT"
-	envSnowflakeUser     = "SNOWFLAKE_USER"
-	envSnowflakePassword = "SNOWFLAKE_PASSWORD"
-	envSnowflakeInitDB   = "SNOWFLAKE_INITDB"
-	envRedisAddr         = "REDIS_ADDR"
+	envSnowflakeAccount   = "SNOWFLAKE_ACCOUNT"
+	envSnowflakeUser      = "SNOWFLAKE_USER"
+	envSnowflakePassword  = "SNOWFLAKE_PASSWORD"
+	envSnowflakeInitDB    = "SNOWFLAKE_INITDB"
+	envSnowflakeWarehouse = "SNOWFLAKE_WAREHOUSE"
+	envSnowflakeRole      = "SNOWFLAKE_ROLE"
+	envSnowflakeSchema    = "SNOWFLAKE_SCHEMA"
 )
+
+const insertStmt = "INSERT INTO device_states (uid, timestamp, version, data) SELECT ?, ?, ?, PARSE_JSON(?)"
 
 func main() {
 	account := os.Getenv(envSnowflakeAccount)
 	user := os.Getenv(envSnowflakeUser)
 	password := os.Getenv(envSnowflakePassword)
 	dsn, err := sf.DSN(&sf.Config{
-		Account:  account,
-		User:     user,
-		Password: password,
+		Account:   account,
+		User:      user,
+		Password:  password,
+		Warehouse: os.Getenv(envSnowflakeWarehouse),
+		Role:      os.Getenv(envSnowflakeRole),
 	})
 	if err != nil {
 		log.Fatalf("failed to create DSN, err: %v", err)
@@ -36,70 +43,81 @@ func main() {
 
 	db, err := sql.Open("snowflake", dsn)
 	if err != nil {
-		log.Fatalf("failed to connect. %v, err: %v", dsn, err)
+		log.Fatalf("failed to connect to Snowflake account %s, err: %v", account, err)
 	}
 	defer db.Close()
 
-	shouldInitDB, _ := strconv.ParseBool(os.Getenv(envSnowflakeInitDB))
-	if shouldInitDB {
-		initDB(db)
-	}
-
-	_, err = db.Exec(`USE DATABASE infinimesh;`)
+	shouldInitDB, err := config.Bool(envSnowflakeInitDB, false)
 	if err != nil {
-		log.Fatalf("failed to use infinimesh database, err: %v", err)
+		log.Fatal(err)
+	}
+	if err := prepareDB(db, shouldInitDB, os.Getenv(envSnowflakeSchema)); err != nil {
+		log.Fatal(err)
 	}
 
-	redisPool := &redis.Pool{Dial: func() (redis.Conn, error) {
-		return redis.Dial("tcp", os.Getenv(envRedisAddr))
-	}}
-	c := consumer.New(redisPool)
-	for event := range c.Consume() {
-		if event == nil {
-			log.Println("received nil event")
-			continue
-		}
-		err := insertDeviceEvent(db, event)
-		if err != nil {
-			log.Printf("failed to insert event to Snowflake: err=%v", err)
-		} else {
-			log.Println("inserted event to Snowflake:", event)
-		}
+	redisPool, err := config.RedisPool()
+	if err != nil {
+		log.Fatal(err)
 	}
+	consumer.New(redisPool).Run(func(event *consumer.DeviceEvent) error {
+		if err := insertDeviceEvent(db, event); err != nil {
+			log.Printf("failed to insert event to Snowflake: %v", err)
+			return err
+		}
+		log.Println("inserted event to Snowflake:", event)
+		return nil
+	})
 }
 
-func initDB(db *sql.DB) {
-	for _, stmt := range []string{
-		`CREATE DATABASE IF NOT EXISTS infinimesh;`,
-		`CREATE TABLE IF NOT EXISTS device_states (
+// quoteIdent quotes a Snowflake identifier.
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// prepareDB selects the infinimesh database and the schema. With init it
+// first creates the database, the schema and the table if they do not exist.
+func prepareDB(db *sql.DB, init bool, schema string) error {
+	var stmts []string
+	if init {
+		stmts = append(stmts, `CREATE DATABASE IF NOT EXISTS infinimesh;`)
+	}
+	stmts = append(stmts, `USE DATABASE infinimesh;`)
+	if schema != "" {
+		// identifiers cannot be bind parameters, so quote it as one
+		if init {
+			stmts = append(stmts, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent(schema)+`;`)
+		}
+		stmts = append(stmts, `USE SCHEMA `+quoteIdent(schema)+`;`)
+	}
+	if init {
+		stmts = append(stmts, `CREATE TABLE IF NOT EXISTS device_states (
 			uid VARCHAR(1000),
 			timestamp TIMESTAMP,
 			version VARCHAR(1000),
 			data VARIANT,
 			PRIMARY KEY (uid, timestamp)
-		);`,
-	} {
-		_, err := db.Exec(stmt)
-		if err != nil {
-			log.Printf("failed to execute db init statement :%s with err: %v\n", stmt, err)
+		);`)
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("failed to run %q: %w", stmt, err)
 		}
 	}
+	return nil
 }
 
 func insertDeviceEvent(db *sql.DB, event *consumer.DeviceEvent) error {
 	t, err := time.Parse(time.RFC3339Nano, event.State.Timestamp)
 	if err != nil {
+		// a bad timestamp will not get better on retry, so drop the event
+		log.Printf("skipping event with bad timestamp %q: %v", event.State.Timestamp, err)
+		return nil
+	}
+	data, err := json.Marshal(event.State.Data)
+	if err != nil {
 		return err
 	}
-	jsonStr, _ := json.Marshal(event.State.Data)
-	// passing variant data as an argument in the query seems to be
-	// unsupported, thus here we opt for a workaround where we pass the json
-	// string into SELECT and PARSE_JSON() instead. This is assumed to be safe
-	// from sql injection
-	//
-	// also see:
-	// - https://community.snowflake.com/s/question/0D50Z00008DCk08SAD/
-	// - https://github.com/snowflakedb/snowflake-connector-nodejs/issues/59
-	_, err = db.Exec("INSERT INTO device_states (uid, timestamp, version, data) SELECT ?, ?, ?, PARSE_JSON('"+string(jsonStr)+"');", event.Object.UID, t, event.State.Version)
+	// all values are bind parameters, so device data cannot change the SQL
+	_, err = db.Exec(insertStmt, event.Object.UID, t, event.State.Version, string(data))
 	return err
 }

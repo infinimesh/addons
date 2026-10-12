@@ -18,18 +18,25 @@ The primary key is `(uid, timestamp)`.
 | Variable | Default | Meaning |
 |---|---|---|
 | `REDIS_ADDR` | | Redis `host:port` |
+| `REDIS_PASSWORD` | | Redis password |
+| `REDIS_TLS` | `false` | connect to Redis with TLS |
+| `REDIS_TLS_INSECURE` | `false` | skip the Redis certificate check, for test setups only |
+| `REDIS_STREAM_START_ID` | `$` | where the consumer group starts when it is first created. `$` reads only new entries, `0` reads the whole stream. |
 | `SNOWFLAKE_ACCOUNT` | | Snowflake account |
 | `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD` | | Snowflake login |
-| `SNOWFLAKE_INITDB` | `false` | create the database and the table on start, if they do not exist |
+| `SNOWFLAKE_WAREHOUSE` | user default | warehouse for the inserts |
+| `SNOWFLAKE_ROLE` | user default | role to use |
+| `SNOWFLAKE_SCHEMA` | user default, usually `PUBLIC` | schema in the `infinimesh` database |
+| `SNOWFLAKE_INITDB` | `false` | create the database, the schema and the table on start, if they do not exist |
 
 ## Limits
 
-- There are no settings for warehouse, role or schema. The user's defaults are used, so the user needs a default warehouse.
-- The data JSON is put straight into the SQL text inside `PARSE_JSON('...')`. A single quote in device data breaks the insert. Only connect devices you trust until this is fixed.
-- It reads as consumer group `group`, with the host name as consumer name. The group is created at the end of the stream, so entries written before the first start are skipped.
-- Each entry is acknowledged before it is written. If the write fails, the entry is logged and lost.
+- All values go in as bind parameters, and the data goes through `PARSE_JSON(?)`. Device data cannot change the SQL.
+- It reads as consumer group `group`, with the host name as consumer name. By default the group starts at the end of the stream, so entries written before the first start are skipped. Set `REDIS_STREAM_START_ID=0` to read them too.
+- An entry is acknowledged only after the write works. A failed entry stays pending and is tried again about once a second, before new entries. Entries that cannot be read, or have a bad timestamp, are dropped with a log line.
+- If the host name changes, for example a new container, entries left pending by the old name are not picked up.
 - `version` is always empty, because the core v3 shadow has no version.
-- Not tested live.
+- Writes to Snowflake are not tested live. Reading the stream, the retry of a failed write and the Redis password were tested against Redis 7.4.
 
 ## Run
 

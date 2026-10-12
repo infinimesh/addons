@@ -38,7 +38,7 @@ services:
       - GCP_BUCKET_NAME=infinimesh
     volumes:
       - ./data:/data/
-      - CHANGEME.json:/gcp/service-account-key.json
+      - ./CHANGEME.json:/gcp/service-account-key.json
   # blobwriter writes to azure blob - delete this service if unneeded
   blobwriter:
     build:
