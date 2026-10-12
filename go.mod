@@ -13,6 +13,7 @@ require (
 	github.com/elastic/go-elasticsearch/v7 v7.17.10
 	github.com/gomodule/redigo v1.9.3
 	github.com/infinimesh/proto v0.0.0-20261011144652-104ae634a302
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/snowflakedb/gosnowflake/v2 v2.3.0
 	github.com/twmb/franz-go v1.22.1
 	github.com/twmb/franz-go/pkg/kadm v1.19.0
@@ -75,6 +76,9 @@ require (
 	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.10.3 // indirect
 	github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/mtibben/percent v0.2.1 // indirect
