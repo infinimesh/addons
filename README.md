@@ -22,6 +22,8 @@ Apache-2.0.
 
 [`sdk`](sdk/README.md) holds the shared API client, the device worker manager, the shadow runner, the JSON message and the batcher used by the shadow addons, and the Redis stream consumer.
 
+To write your own addon, see [docs/write-an-addon.md](docs/write-an-addon.md).
+
 ## Run
 
 From this repository, with `API_URL` pointing at a running platform:
