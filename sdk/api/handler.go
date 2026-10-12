@@ -60,13 +60,20 @@ type Namespace struct {
 func (h *handlerImpl) GetNamespaces() (*NamespacesRes, error) {
 	ctx, cancel := h.accountCtx()
 	defer cancel()
-	res, err := h.namespaces.List(ctx, &pb.EmptyMessage{})
-	if err != nil {
-		return nil, NewFailedRequestError("NamespacesService.List", err)
-	}
 	ret := &NamespacesRes{}
-	for _, ns := range res.GetNamespaces() {
-		ret.Namespaces = append(ret.Namespaces, Namespace{ID: ns.GetUuid(), Name: ns.GetTitle()})
+	req := &pb.ListRequest{}
+	for {
+		res, err := h.namespaces.List(ctx, req)
+		if err != nil {
+			return nil, NewFailedRequestError("NamespacesService.List", err)
+		}
+		for _, ns := range res.GetNamespaces() {
+			ret.Namespaces = append(ret.Namespaces, Namespace{ID: ns.GetUuid(), Name: ns.GetTitle()})
+		}
+		// The API returns one page per call; follow the token to the end.
+		if req.PageToken = res.GetNextPageToken(); req.PageToken == "" {
+			break
+		}
 	}
 	return ret, nil
 }
@@ -90,13 +97,19 @@ type Object struct {
 func (h *handlerImpl) GetObjects(namespaceID string) (*ObjectsRes, error) {
 	ctx, cancel := h.accountCtx()
 	defer cancel()
-	res, err := h.devices.List(ctx, &pb.QueryRequest{Namespace: namespaceID})
-	if err != nil {
-		return nil, NewFailedRequestError("DevicesService.List", err)
-	}
 	ret := &ObjectsRes{}
-	for _, d := range res.GetDevices() {
-		ret.Objects = append(ret.Objects, Object{UID: d.GetUuid(), Name: d.GetTitle(), Kind: "device", Tags: d.GetTags(), Namespace: namespaceID})
+	req := &pb.QueryRequest{Namespace: namespaceID}
+	for {
+		res, err := h.devices.List(ctx, req)
+		if err != nil {
+			return nil, NewFailedRequestError("DevicesService.List", err)
+		}
+		for _, d := range res.GetDevices() {
+			ret.Objects = append(ret.Objects, Object{UID: d.GetUuid(), Name: d.GetTitle(), Kind: "device", Tags: d.GetTags(), Namespace: namespaceID})
+		}
+		if req.PageToken = res.GetNextPageToken(); req.PageToken == "" {
+			break
+		}
 	}
 	return ret, nil
 }
