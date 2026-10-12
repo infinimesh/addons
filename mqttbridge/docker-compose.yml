@@ -1,0 +1,21 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: mqttbridge/Dockerfile
+    environment:
+      - USERNAME=CHANGEME
+      - PASSWORD=CHANGEME
+      - API_URL=https://api.example.com
+      - MQTT_BROKER=tcp://mosquitto:1883
+      - MQTT_TOPIC=infinimesh/devices/{device}/shadow
+    depends_on:
+      - mosquitto
+    restart: on-failure
+  # Mosquitto without auth for trying it out. Delete this service and point
+  # MQTT_BROKER at your own broker instead.
+  mosquitto:
+    image: eclipse-mosquitto:2
+    command: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+    ports:
+      - "1883:1883"
