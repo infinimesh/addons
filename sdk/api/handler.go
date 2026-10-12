@@ -19,6 +19,7 @@ type Handler interface {
 	GetNamespaces() (*NamespacesRes, error)
 	GetObjects(namespaceID string) (*ObjectsRes, error)
 	GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error)
+	GetDeviceShadowStream(deviceID string) (<-chan *shadowpb.Shadow, error)
 }
 
 type handlerImpl struct {
@@ -132,12 +133,31 @@ func formatTimestamp(t *timestamppb.Timestamp) string {
 }
 
 // GetDevicesStateStream streams reported state changes of one device.
+// Shadow updates without reported data are skipped.
+func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error) {
+	shadows, err := h.GetDeviceShadowStream(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	ret := make(chan *DevicesStateRes)
+	go func() {
+		for s := range shadows {
+			if st := ShadowToState(s); st != nil {
+				ret <- st
+			}
+		}
+	}()
+	return ret, nil
+}
+
+// GetDeviceShadowStream streams full shadow updates (reported, desired and
+// connection state) of one device.
 //
 // It asks core for a short device token with read access to the device
 // (DevicesService.MakeDevicesToken) and then calls ShadowService.StreamShadow
 // with it. On any error it waits a second, gets a new token and reconnects.
-func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error) {
-	ret := make(chan *DevicesStateRes)
+func (h *handlerImpl) GetDeviceShadowStream(deviceID string) (<-chan *shadowpb.Shadow, error) {
+	ret := make(chan *shadowpb.Shadow)
 	go func() {
 		for {
 			if err := h.streamOnce(deviceID, ret); err != nil {
@@ -149,7 +169,7 @@ func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesSta
 	return ret, nil
 }
 
-func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *DevicesStateRes) error {
+func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *shadowpb.Shadow) error {
 	tctx, cancel := h.accountCtx()
 	tok, err := h.devices.MakeDevicesToken(tctx, &pb.DevicesTokenRequest{
 		Devices: map[string]access.Level{deviceID: access.Level_READ},
@@ -176,11 +196,12 @@ func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *DevicesStateRes) er
 		if err != nil {
 			return NewFailedRequestError("ShadowService.StreamShadow", err)
 		}
-		if msg.GetDevice() != "" && msg.GetDevice() != deviceID {
+		if msg.GetDevice() == "" {
+			msg.Device = deviceID
+		}
+		if msg.GetDevice() != deviceID {
 			continue
 		}
-		if st := ShadowToState(msg); st != nil {
-			ch <- st
-		}
+		ch <- msg
 	}
 }
