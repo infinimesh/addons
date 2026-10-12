@@ -38,10 +38,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid %s value: %s", envObjectRefreshIntervalSecs, objectRefreshIntervalSecsStr)
 	}
-	apiHandler := api.NewHandler(
-		api.NewTokenHandler(username, password, apiUrl, time.Duration(tokenRefreshIntervalSecs)*time.Second),
-		apiUrl,
-	)
+	conn, err := api.Dial(apiUrl)
+	if err != nil {
+		log.Fatalf("failed to set up connection to %s: %s", apiUrl, err)
+	}
+	defer conn.Close()
+	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, username, password, time.Duration(tokenRefreshIntervalSecs)*time.Second))
 
 	wrappers.NewObjectManager(
 		apiHandler,
