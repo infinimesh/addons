@@ -13,6 +13,7 @@ Apache-2.0.
 | [`webhook`](webhook/README.md) | API to an HTTP endpoint, one signed JSON POST per shadow update |
 | [`postgres`](postgres/README.md) | API to a Postgres table, optionally a TimescaleDB hypertable |
 | [`influxdb`](influxdb/README.md) | API to InfluxDB 2, InfluxDB Cloud or InfluxDB 3, one point per shadow update |
+| [`mqttbridge`](mqttbridge/README.md) | API to an existing MQTT broker, JSON per shadow update on a topic template |
 | [`cloudconnect`](cloudconnect/README.md) | API to CSV files, then S3, Google Cloud Storage or Azure Blob |
 | [`redisstream`](redisstream/README.md) | API to the Redis stream `objects`, read by the sinks below |
 | [`elasticsearch`](elasticsearch/README.md) | Redis stream to the Elasticsearch index `infinimesh` |
