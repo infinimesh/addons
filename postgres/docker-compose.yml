@@ -1,0 +1,27 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: postgres/Dockerfile
+    environment:
+      - USERNAME=CHANGEME
+      - PASSWORD=CHANGEME
+      - API_URL=https://api.example.com
+      - POSTGRES_URL=postgres://postgres:CHANGEME@postgres:5432/postgres
+      - POSTGRES_TIMESCALE=true
+    depends_on:
+      - postgres
+    restart: on-failure
+  # Postgres with TimescaleDB for trying it out. Delete this service and point
+  # POSTGRES_URL at your own server instead. Set POSTGRES_TIMESCALE=false for
+  # plain Postgres.
+  postgres:
+    image: timescale/timescaledb:latest-pg17
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=CHANGEME
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:

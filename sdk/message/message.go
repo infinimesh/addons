@@ -44,10 +44,10 @@ func state(s *shadowpb.State) *State {
 	return &State{Timestamp: ts(s.GetTimestamp()), Data: s.GetData().AsMap()}
 }
 
-// Build turns a shadow update into a key (the device id) and a JSON value.
-// ok is false when there is nothing to send.
-func Build(obj api.Object, s *shadowpb.Shadow, onlyReported bool, now time.Time) (key, value []byte, ok bool) {
-	m := Message{
+// New turns a shadow update into a Message. ok is false when there is
+// nothing to send.
+func New(obj api.Object, s *shadowpb.Shadow, onlyReported bool, now time.Time) (m *Message, ok bool) {
+	m = &Message{
 		Device:   obj.UID,
 		Title:    obj.Name,
 		Reported: state(s.GetReported()),
@@ -60,6 +60,41 @@ func Build(obj api.Object, s *shadowpb.Shadow, onlyReported bool, now time.Time)
 		}
 	}
 	if m.Reported == nil && m.Desired == nil && m.Connection == nil {
+		return nil, false
+	}
+	return m, true
+}
+
+// Time is the time of the update: the reported timestamp, then the desired
+// one, then the connection one, then SentAt.
+func (m *Message) Time() time.Time {
+	for _, v := range []string{stamp(m.Reported), stamp(m.Desired), connStamp(m.Connection), m.SentAt} {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func stamp(s *State) string {
+	if s == nil {
+		return ""
+	}
+	return s.Timestamp
+}
+
+func connStamp(c *Connection) string {
+	if c == nil {
+		return ""
+	}
+	return c.Timestamp
+}
+
+// Build turns a shadow update into a key (the device id) and a JSON value.
+// ok is false when there is nothing to send.
+func Build(obj api.Object, s *shadowpb.Shadow, onlyReported bool, now time.Time) (key, value []byte, ok bool) {
+	m, ok := New(obj, s, onlyReported, now)
+	if !ok {
 		return nil, nil, false
 	}
 	b, err := json.Marshal(m)
