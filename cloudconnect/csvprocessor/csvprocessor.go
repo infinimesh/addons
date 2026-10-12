@@ -22,6 +22,10 @@ func WalkLoop(f filepath.WalkFunc) {
 
 func WalkFunc(handleFile func(*os.File) error) filepath.WalkFunc {
 	return func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Printf("failed to read %s: %v\n", path, err)
+			return nil
+		}
 		if info.IsDir() {
 			return nil
 		}

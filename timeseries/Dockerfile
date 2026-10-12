@@ -5,7 +5,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/app ./timeseries
 
-FROM alpine:3.20
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/app /app
+USER 65532:65532
 ENTRYPOINT ["/app"]

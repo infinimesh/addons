@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
+	"path/filepath"
 
-	"github.com/Azure/azure-storage-blob-go/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/infinimesh/addons/cloudconnect/csvprocessor"
 )
 
@@ -19,21 +19,20 @@ const (
 
 func main() {
 	accountName := os.Getenv(envAzAccountName)
-	accountKey := os.Getenv(envAzAccountKey)
-	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
+	containerName := os.Getenv(envAzContainerName)
+	credential, err := azblob.NewSharedKeyCredential(accountName, os.Getenv(envAzAccountKey))
 	if err != nil {
 		log.Fatal(err)
 	}
-	p := azblob.NewPipeline(credential, azblob.PipelineOptions{})
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net", accountName))
-	serviceURL := azblob.NewServiceURL(*u, p)
+	client, err := azblob.NewClientWithSharedKeyCredential(fmt.Sprintf("https://%s.blob.core.windows.net/", accountName), credential, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
 	ctx := context.Background()
-	containerURL := serviceURL.NewContainerURL(os.Getenv(envAzContainerName))
-	_, _ = containerURL.Create(ctx, azblob.Metadata{}, azblob.PublicAccessNone)
+	// The container may already exist, so an error here is not fatal.
+	_, _ = client.CreateContainer(ctx, containerName, nil)
 	csvprocessor.WalkLoop(csvprocessor.WalkFunc(func(f *os.File) error {
-		_, err = containerURL.
-			NewBlockBlobURL(f.Name()).
-			Upload(context.Background(), f, azblob.BlobHTTPHeaders{}, azblob.Metadata{}, azblob.BlobAccessConditions{}, azblob.DefaultAccessTier, nil, azblob.ClientProvidedKeyOptions{}, azblob.ImmutabilityPolicyOptions{})
+		_, err := client.UploadFile(ctx, containerName, filepath.Base(f.Name()), f, nil)
 		return err
 	}))
 }

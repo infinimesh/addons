@@ -24,6 +24,6 @@ services:
       - REDIS_ADDR=redis:6379
     restart: on-failure
   redis:
-    image: redis:6.0.9-alpine
+    image: redis:7.4-alpine
     ports:
       - "6379:6379"
