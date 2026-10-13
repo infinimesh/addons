@@ -32,12 +32,12 @@ Use this format when the target takes JSON, so all addons send the same thing.
 
 ## Register an OTA plugin
 
-`POST /v1/plugins` requires a root token. On a fresh install the root account is `infinimesh` and the password is `INF_DEFAULT_ROOT_PASS`.
+`POST /v1/plugins` requires a root token. On a fresh install the root account is `infinimesh` and the password is `INF_DEFAULT_ROOT_PASS`. The token request sets `inf` to true. A login without it gets 403.
 
 ```bash
 curl -s -X POST "$API/v1/token" \
   -H 'Content-Type: application/json' \
-  -d '{"auth":{"type":"standard","data":["infinimesh","<INF_DEFAULT_ROOT_PASS>"]}}'
+  -d '{"auth":{"type":"standard","data":["infinimesh","<INF_DEFAULT_ROOT_PASS>"]},"inf":true}'
 ```
 
 Create the plugin with that token. `kind` is `OTA` and `provider` is `hawkbit`, `mender`, or `webhook`. The response field `token` is returned once and is not stored.
