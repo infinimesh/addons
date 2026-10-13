@@ -30,6 +30,27 @@ An update can carry any of the three. `sdk/message` turns an update into this JS
 
 Use this format when the target takes JSON, so all addons send the same thing.
 
+## Register an OTA plugin
+
+`POST /v1/plugins` requires a root token. On a fresh install the root account is `infinimesh` and the password is `INF_DEFAULT_ROOT_PASS`.
+
+```bash
+curl -s -X POST "$API/v1/token" \
+  -H 'Content-Type: application/json' \
+  -d '{"auth":{"type":"standard","data":["infinimesh","<INF_DEFAULT_ROOT_PASS>"]}}'
+```
+
+Create the plugin with that token. `kind` is `OTA` and `provider` is `hawkbit`, `mender`, or `webhook`. The response field `token` is returned once and is not stored.
+
+```bash
+curl -s -X POST "$API/v1/plugins" \
+  -H "Authorization: Bearer <root token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Hawkbit","kind":"OTA","provider":"hawkbit","public":true}'
+```
+
+The addon sends `Authorization: Bearer <token>` on `POST /v1/devices/ota:assign` and on patches that set `desired.ota`. A later get returns `token_id` and an empty `token`. Deleting the plugin, or changing its provider, invalidates that token. This is not a call the addon SDK makes. The addon process still logs in with `USERNAME` and `PASSWORD` when it only streams shadows.
+
 ## The SDK
 
 | Package | Use it for |
