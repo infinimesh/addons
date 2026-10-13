@@ -40,7 +40,7 @@ Each compose file's build context is the repository root. Set `USERNAME`, `PASSW
 
 The SDK uses the core v3 gRPC API through the generated clients in [infinimesh/proto](https://github.com/infinimesh/proto), the same way `inf` does.
 
-- `USERNAME` and `PASSWORD` are a standard infinimesh account. A fresh core install has the root account `infinimesh` with the password from `INF_DEFAULT_ROOT_PASS`. A separate read only account is better for addons.
+- `USERNAME` and `PASSWORD` are a standard infinimesh account. A fresh core install has the root account `infinimesh` with the password from `INF_DEFAULT_ROOT_PASS`. A separate read only account is better for addons. Creating a plugin, including an OTA plugin, needs a root token from `POST /v1/token`. See [Write an addon](docs/write-an-addon.md#register-an-ota-plugin).
 - `API_URL` is the gRPC address. `https://api.example.com` uses TLS on port 443, which the core compose setup routes to the api service. `http://api.example.com:8000` uses plain gRPC on the `grpc` entry point, or `http://api:8000` from inside the core compose network. With no scheme, TLS is used.
 - Addons see every device the account can see. For each device they ask core for a short device token with read access and stream its shadow. Only the reported state is used. The v3 shadow has no version, so the `version` field the sinks store is empty.
 
