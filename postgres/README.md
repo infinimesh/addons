@@ -31,7 +31,7 @@ ORDER BY time DESC LIMIT 100;
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed namespaces. Devices added to or removed from a namespace are picked up at once from the stream. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `POSTGRES_URL` | | connection string, for example `postgres://user:pass@host:5432/db?sslmode=require`. All [pgx settings](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool#ParseConfig) work, such as `pool_max_conns`. |
 | `POSTGRES_TABLE` | `device_shadows` | `table` or `schema.table` |
 | `POSTGRES_TIMESCALE` | `false` | create the extension and a hypertable |

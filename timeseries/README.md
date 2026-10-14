@@ -17,7 +17,7 @@ TS.RANGE temp:f3913526-38d9-4bf2-a60d-b616d6ec8dcc - +
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed namespaces. Devices added to or removed from a namespace are picked up at once from the stream. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `REDIS_ADDR` | | Redis `host:port`. Redis needs the RedisTimeSeries module. |
 | `REDIS_PASSWORD` | | Redis password |
 | `REDIS_TLS` | `false` | connect to Redis with TLS |

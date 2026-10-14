@@ -3,7 +3,8 @@
 Packages under `github.com/infinimesh/addons/sdk`.
 
 - `api`: login, device list and device state stream over the core v3 gRPC API
-- `wrappers`: starts and stops one worker per device
+- `wrappers`: starts and stops one worker per device (older per-device path)
+- `runner`: one shadow stream per namespace, used by every shadow addon
 - `runner`: the main loop for addons that stream device shadows. It logs in, follows the device list and calls your function for each shadow update.
 - `message`: the JSON form of a shadow update, shared by the shadow addons
 - `batch`: queues rows and writes them in batches, keeping them while the database is down

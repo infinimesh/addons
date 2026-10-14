@@ -9,7 +9,8 @@ import (
 
 	"github.com/infinimesh/addons/sdk/api"
 	"github.com/infinimesh/addons/sdk/message"
-	"github.com/infinimesh/addons/sdk/wrappers"
+	"github.com/infinimesh/addons/sdk/runner"
+	shadowpb "github.com/infinimesh/proto/shadow"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -37,11 +38,7 @@ func main() {
 	defer conn.Close()
 	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, cfg.Username, cfg.Password, cfg.TokenRefresh))
 
-	wrappers.NewObjectManager(
-		apiHandler,
-		(&workerFactory{api: apiHandler, kafka: kc, cfg: cfg}).NewWorker,
-		cfg.DeviceRefresh,
-	).Start()
+	runner.Serve(context.Background(), apiHandler, sink(kc, cfg.OnlyReported), cfg.DeviceRefresh)
 }
 
 // ensureTopic checks that the cluster answers and creates the topic when
@@ -65,51 +62,24 @@ func ensureTopic(kc *kgo.Client, cfg *config) error {
 	return nil
 }
 
-type workerFactory struct {
-	api   api.Handler
-	kafka *kgo.Client
-	cfg   *config
+// producer is the part of the Kafka client the sink uses.
+type producer interface {
+	Produce(ctx context.Context, r *kgo.Record, promise func(*kgo.Record, error))
 }
 
-func (f *workerFactory) NewWorker(obj api.Object) wrappers.Process {
-	return &worker{obj: obj, f: f, done: make(chan struct{})}
-}
-
-type worker struct {
-	obj  api.Object
-	f    *workerFactory
-	done chan struct{}
-}
-
-func (w *worker) Start() {
-	// The stream stops when Start returns, which Stop causes.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch, err := w.f.api.GetDeviceShadowStream(ctx, w.obj.UID)
-	if err != nil {
-		log.Printf("error on get device shadow stream: %s\n", err)
-		return
-	}
-	for {
-		select {
-		case <-w.done:
+// sink produces one record per shadow update, keyed by device.
+func sink(kc producer, onlyReported bool) runner.Handler {
+	return func(obj api.Object, s *shadowpb.Shadow) {
+		key, value, ok := message.Build(obj, s, onlyReported, time.Now())
+		if !ok {
 			return
-		case s := <-ch:
-			key, value, ok := message.Build(w.obj, s, w.f.cfg.OnlyReported, time.Now())
-			if !ok {
-				continue
-			}
-			w.f.kafka.Produce(context.Background(), &kgo.Record{Key: key, Value: value}, func(r *kgo.Record, err error) {
-				if err != nil {
-					log.Printf("failed to produce for device %s: %s\n", w.obj.UID, err)
-					return
-				}
-				log.Printf("produced device %s to %s partition %d offset %d\n", w.obj.UID, r.Topic, r.Partition, r.Offset)
-			})
 		}
+		kc.Produce(context.Background(), &kgo.Record{Key: key, Value: value}, func(r *kgo.Record, err error) {
+			if err != nil {
+				log.Printf("failed to produce for device %s: %s\n", obj.UID, err)
+				return
+			}
+			log.Printf("produced device %s to %s partition %d offset %d\n", obj.UID, r.Topic, r.Partition, r.Offset)
+		})
 	}
-}
-
-func (w *worker) Stop() {
-	close(w.done)
 }
