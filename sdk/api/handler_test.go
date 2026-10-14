@@ -48,3 +48,17 @@ func TestShadowToState(t *testing.T) {
 		t.Error("want nil for a shadow without reported state")
 	}
 }
+
+// TestShadowToStateKeepsVersion: the reported version from core must reach
+// the sinks (redisstream, elasticsearch, csvwriter, saphana).
+func TestShadowToStateKeepsVersion(t *testing.T) {
+	data, _ := structpb.NewStruct(map[string]interface{}{"temp": 1.0})
+	got := ShadowToState(&shadowpb.Shadow{Device: "d1", Reported: &shadowpb.State{Data: data, Version: 6}})
+	if got == nil || got.Result.ReportedState.Version != "6" {
+		t.Fatalf("state = %+v, want version 6", got)
+	}
+	got = ShadowToState(&shadowpb.Shadow{Device: "d1", Reported: &shadowpb.State{Data: data}})
+	if got.Result.ReportedState.Version != "" {
+		t.Errorf("version = %q, want empty when core sends none", got.Result.ReportedState.Version)
+	}
+}
