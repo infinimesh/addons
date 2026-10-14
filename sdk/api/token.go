@@ -21,6 +21,7 @@ type tokenHandlerImpl struct {
 	client    pb.AccountsServiceClient
 	username  string
 	password  string
+	ttl       time.Duration
 	lastToken string
 }
 
@@ -36,6 +37,7 @@ func NewTokenHandler(conn grpc.ClientConnInterface, username, password string, r
 		client:   pb.NewAccountsServiceClient(conn),
 		username: username,
 		password: password,
+		ttl:      2 * refreshInterval,
 	}
 	if err := h.RefreshToken(); err != nil {
 		log.Printf("error retrieving token: %s\n", err)
@@ -55,7 +57,8 @@ func (h *tokenHandlerImpl) RefreshToken() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	res, err := h.client.Token(ctx, &pb.TokenRequest{
-		Auth: &accpb.Credentials{Type: "standard", Data: []string{h.username, h.password}},
+		Auth:      &accpb.Credentials{Type: "standard", Data: []string{h.username, h.password}},
+		ExpiresAt: time.Now().Add(h.ttl).Unix(),
 	})
 	if err != nil {
 		return NewFailedRequestError("AccountsService.Token", err)
