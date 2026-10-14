@@ -97,16 +97,26 @@ func initDB(db *sql.DB) error {
 }
 
 func insertDeviceEvent(db *sql.DB, event *consumer.DeviceEvent) error {
+	args, ok, err := rowArgs(event)
+	if !ok || err != nil {
+		return err
+	}
+	_, err = db.Exec(insertStmt, args...)
+	return err
+}
+
+// rowArgs maps an event to the insertStmt arguments: uid, timestamp, version
+// and data as JSON. ok is false for an event to drop.
+func rowArgs(event *consumer.DeviceEvent) (args []interface{}, ok bool, err error) {
 	t, err := time.Parse(time.RFC3339Nano, event.State.Timestamp)
 	if err != nil {
 		// a bad timestamp will not get better on retry, so drop the event
 		log.Printf("skipping event with bad timestamp %q: %v", event.State.Timestamp, err)
-		return nil
+		return nil, false, nil
 	}
 	jsonData, err := json.Marshal(event.State.Data)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	_, err = db.Exec(insertStmt, event.Object.UID, t, event.State.Version, string(jsonData))
-	return err
+	return []interface{}{event.Object.UID, t, event.State.Version, string(jsonData)}, true, nil
 }

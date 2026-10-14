@@ -31,13 +31,7 @@ type objectWorker struct {
 }
 
 func (w *objectWorker) Start() {
-	createOpts := redistimeseries.CreateOptions{
-		Labels: map[string]string{
-			"uid":  w.obj.UID,
-			"name": w.obj.Name,
-			"kind": w.obj.Kind,
-		},
-	}
+	createOpts := redistimeseries.CreateOptions{Labels: seriesLabels(w.obj)}
 
 	// The stream stops when Start returns, which Stop causes.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,20 +52,14 @@ func (w *objectWorker) Start() {
 				log.Printf("received nil state for object %v", w.obj)
 				continue
 			}
-			for k, v := range state.Result.ReportedState.Data {
-				if v == nil {
-					continue
-				}
-				f, ok := v.(float64)
-				if !ok {
-					log.Printf("invalid data type found for object %v and key %s", w.obj, k)
-					continue
-				}
+			for _, p := range seriesPoints(w.obj, state) {
+				k := p.Key
+				f := p.Value
 				if !createdKeys[k] {
-					_ = w.redisClient.CreateKeyWithOptions(k+":"+w.obj.UID, createOpts)
+					_ = w.redisClient.CreateKeyWithOptions(k, createOpts)
 					createdKeys[k] = true
 				}
-				_, err = w.redisClient.AddAutoTsWithOptions(k+":"+w.obj.UID, f, createOpts)
+				_, err = w.redisClient.AddAutoTsWithOptions(k, f, createOpts)
 				if err != nil {
 					log.Printf("failed to add time series item: %s\n", err)
 					continue
@@ -84,4 +72,32 @@ func (w *objectWorker) Start() {
 
 func (w *objectWorker) Stop() {
 	close(w.done)
+}
+
+// point is one sample: the series key "<data key>:<device uid>" and its value.
+type point struct {
+	Key   string
+	Value float64
+}
+
+// seriesLabels are the labels set on every series of a device.
+func seriesLabels(obj api.Object) map[string]string {
+	return map[string]string{"uid": obj.UID, "name": obj.Name, "kind": obj.Kind}
+}
+
+// seriesPoints maps the reported data of a device to samples. Only numbers are
+// kept; nil values and other types are skipped.
+func seriesPoints(obj api.Object, state *api.DevicesStateRes) []point {
+	var ret []point
+	for k, v := range state.Result.ReportedState.Data {
+		f, ok := v.(float64)
+		if !ok {
+			if v != nil {
+				log.Printf("invalid data type found for object %v and key %s", obj, k)
+			}
+			continue
+		}
+		ret = append(ret, point{Key: k + ":" + obj.UID, Value: f})
+	}
+	return ret
 }
