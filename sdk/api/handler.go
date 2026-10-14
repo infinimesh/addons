@@ -18,8 +18,8 @@ import (
 type Handler interface {
 	GetNamespaces() (*NamespacesRes, error)
 	GetObjects(namespaceID string) (*ObjectsRes, error)
-	GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error)
-	GetDeviceShadowStream(deviceID string) (<-chan *shadowpb.Shadow, error)
+	GetDevicesStateStream(ctx context.Context, deviceID string) (<-chan *DevicesStateRes, error)
+	GetDeviceShadowStream(ctx context.Context, deviceID string) (<-chan *shadowpb.Shadow, error)
 	StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
 }
 
@@ -156,17 +156,24 @@ func formatTimestamp(t *timestamppb.Timestamp) string {
 }
 
 // GetDevicesStateStream streams reported state changes of one device.
-// Shadow updates without reported data are skipped.
-func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error) {
-	shadows, err := h.GetDeviceShadowStream(deviceID)
+// Shadow updates without reported data are skipped. The stream stops and the
+// channel closes when ctx is done.
+func (h *handlerImpl) GetDevicesStateStream(ctx context.Context, deviceID string) (<-chan *DevicesStateRes, error) {
+	shadows, err := h.GetDeviceShadowStream(ctx, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	ret := make(chan *DevicesStateRes)
 	go func() {
+		defer close(ret)
 		for s := range shadows {
-			if st := ShadowToState(s); st != nil {
-				ret <- st
+			st := ShadowToState(s)
+			if st == nil {
+				continue
+			}
+			select {
+			case ret <- st:
+			case <-ctx.Done():
 			}
 		}
 	}()
@@ -178,21 +185,27 @@ func (h *handlerImpl) GetDevicesStateStream(deviceID string) (<-chan *DevicesSta
 //
 // It asks core for a short device token with read access to the device
 // (DevicesService.MakeDevicesToken) and then calls ShadowService.StreamShadow
-// with it. On any error it waits a second, gets a new token and reconnects.
-func (h *handlerImpl) GetDeviceShadowStream(deviceID string) (<-chan *shadowpb.Shadow, error) {
+// with it. On any error it waits, gets a new token and reconnects. The stream
+// stops and the channel closes when ctx is done.
+func (h *handlerImpl) GetDeviceShadowStream(ctx context.Context, deviceID string) (<-chan *shadowpb.Shadow, error) {
 	ret := make(chan *shadowpb.Shadow)
 	go func() {
+		defer close(ret)
 		for {
-			if err := h.streamOnce(deviceID, ret); err != nil {
+			if err := h.streamOnce(ctx, deviceID, ret); err != nil && ctx.Err() == nil {
 				log.Printf("device %s state stream: %s\n", deviceID, err)
 			}
-			time.Sleep(time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(h.retry):
+			}
 		}
 	}()
 	return ret, nil
 }
 
-func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *shadowpb.Shadow) error {
+func (h *handlerImpl) streamOnce(ctx context.Context, deviceID string, ch chan<- *shadowpb.Shadow) error {
 	tctx, cancel := h.accountCtx()
 	tok, err := h.devices.MakeDevicesToken(tctx, &pb.DevicesTokenRequest{
 		Devices: map[string]access.Level{deviceID: access.Level_READ},
@@ -202,9 +215,9 @@ func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *shadowpb.Shadow) er
 		return NewFailedRequestError("DevicesService.MakeDevicesToken", err)
 	}
 
-	ctx, stop := context.WithCancel(withBearer(context.Background(), tok.GetToken()))
+	sctx, stop := context.WithCancel(withBearer(ctx, tok.GetToken()))
 	defer stop()
-	stream, err := h.shadow.StreamShadow(ctx, &shadowpb.StreamShadowRequest{
+	stream, err := h.shadow.StreamShadow(sctx, &shadowpb.StreamShadowRequest{
 		Devices:   []string{deviceID},
 		OnlyDelta: false,
 	})
@@ -225,7 +238,11 @@ func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *shadowpb.Shadow) er
 		if msg.GetDevice() != deviceID {
 			continue
 		}
-		ch <- msg
+		select {
+		case ch <- msg:
+		case <-ctx.Done():
+			return nil
+		}
 	}
 }
 
