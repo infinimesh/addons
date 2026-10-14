@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"sync"
+	"time"
 
 	redistimeseries "github.com/RedisTimeSeries/redistimeseries-go"
 	"github.com/infinimesh/addons/sdk/api"
@@ -12,7 +13,7 @@ import (
 // series is the part of the RedisTimeSeries client the sink uses.
 type series interface {
 	CreateKeyWithOptions(key string, opts redistimeseries.CreateOptions) error
-	AddAutoTsWithOptions(key string, value float64, opts redistimeseries.CreateOptions) (int64, error)
+	AddWithOptions(key string, timestamp int64, value float64, opts redistimeseries.CreateOptions) (int64, error)
 }
 
 // sink adds one sample per numeric reported value.
@@ -31,7 +32,11 @@ func (k *sink) handle(obj api.Object, s *shadowpb.Shadow) {
 	if state == nil {
 		return
 	}
-	opts := redistimeseries.CreateOptions{Labels: seriesLabels(obj)}
+	// Use the time of the update, not the Redis server time, so the burst of
+	// replayed updates after a reconnect keeps its own times. LAST makes a
+	// replayed sample overwrite its earlier copy instead of failing.
+	opts := redistimeseries.CreateOptions{Labels: seriesLabels(obj), DuplicatePolicy: redistimeseries.LastDuplicatePolicy}
+	ts := sampleTime(s)
 	for _, p := range seriesPoints(obj, state) {
 		k.mu.Lock()
 		if !k.created[p.Key] {
@@ -39,7 +44,7 @@ func (k *sink) handle(obj api.Object, s *shadowpb.Shadow) {
 			k.created[p.Key] = true
 		}
 		k.mu.Unlock()
-		if _, err := k.client.AddAutoTsWithOptions(p.Key, p.Value, opts); err != nil {
+		if _, err := k.client.AddWithOptions(p.Key, ts, p.Value, opts); err != nil {
 			log.Printf("failed to add time series item: %s\n", err)
 			continue
 		}
@@ -73,4 +78,13 @@ func seriesPoints(obj api.Object, state *api.DevicesStateRes) []point {
 		ret = append(ret, point{Key: k + ":" + obj.UID, Value: f})
 	}
 	return ret
+}
+
+// sampleTime is the reported timestamp of the update in Unix milliseconds, or
+// now when the update has none.
+func sampleTime(s *shadowpb.Shadow) int64 {
+	if t := s.GetReported().GetTimestamp(); t != nil {
+		return t.AsTime().UnixMilli()
+	}
+	return time.Now().UnixMilli()
 }
