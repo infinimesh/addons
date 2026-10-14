@@ -164,8 +164,8 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 h1:Bd7KaOxzULLxtZ/K5s1aLbWhR0+
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0/go.mod h1:nN7ts3dFXKtCZWc//yfkpcQNKJABg16/uDVAZpLDalo=
 github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c h1:6rhixN/i8ZofjG1Y75iExal34USq5p+wiN1tpie8IrU=
 github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c/go.mod h1:NMPJylDgVpX0MLRlPy15sqSwOFv/U1GZ2m21JhFfek0=
-github.com/infinimesh/proto v1.1.0 h1:iztQMr3ITPv+7lJxcBHqhYk8Pu2tjM0WP4HvNzxZ+Ps=
-github.com/infinimesh/proto v1.1.0/go.mod h1:bC0x2UQ/Q+IGz7knKtpLAXwnWGQ2smUZi4pq85dKHQ8=
+github.com/infinimesh/proto v1.2.0 h1:G5kBoxJ9v/Clr6M8+U1e6rBnj/c5//xMHSmKwt10aIw=
+github.com/infinimesh/proto v1.2.0/go.mod h1:bC0x2UQ/Q+IGz7knKtpLAXwnWGQ2smUZi4pq85dKHQ8=
 github.com/influxdata/influxdb-client-go/v2 v2.14.0 h1:AjbBfJuq+QoaXNcrova8smSjwJdUHnwvfjMF71M1iI4=
 github.com/influxdata/influxdb-client-go/v2 v2.14.0/go.mod h1:Ahpm3QXKMJslpXl3IftVLVezreAUtBOTZssDrjZEFHI=
 github.com/influxdata/line-protocol v0.0.0-20200327222509-2487e7298839 h1:W9WBk7wlPfJLvMCdtV4zPulc4uCPrlywQOmbFOhgQNU=
