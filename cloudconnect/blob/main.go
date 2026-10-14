@@ -30,8 +30,17 @@ func main() {
 	ctx := context.Background()
 	// The container may already exist, so an error here is not fatal.
 	_, _ = client.CreateContainer(ctx, containerName, nil)
-	csvprocessor.WalkLoop(func(f *os.File, name string) error {
+	csvprocessor.WalkLoop(uploader(ctx, client, containerName))
+}
+
+type fileUploader interface {
+	UploadFile(ctx context.Context, containerName, blobName string, file *os.File, o *azblob.UploadFileOptions) (azblob.UploadFileResponse, error)
+}
+
+// uploader uploads each spool file to the container under its spool name.
+func uploader(ctx context.Context, client fileUploader, containerName string) func(f *os.File, name string) error {
+	return func(f *os.File, name string) error {
 		_, err := client.UploadFile(ctx, containerName, name, f, nil)
 		return err
-	})
+	}
 }

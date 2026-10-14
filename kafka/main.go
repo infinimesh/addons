@@ -82,7 +82,10 @@ type worker struct {
 }
 
 func (w *worker) Start() {
-	ch, err := w.f.api.GetDeviceShadowStream(w.obj.UID)
+	// The stream stops when Start returns, which Stop causes.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := w.f.api.GetDeviceShadowStream(ctx, w.obj.UID)
 	if err != nil {
 		log.Printf("error on get device shadow stream: %s\n", err)
 		return

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -81,7 +82,10 @@ type objectWorker struct {
 }
 
 func (w *objectWorker) Start() {
-	ch, err := w.api.GetDevicesStateStream(w.obj.UID)
+	// The stream stops when Start returns, which Stop causes.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := w.api.GetDevicesStateStream(ctx, w.obj.UID)
 	if err != nil {
 		log.Printf("error on get devices state stream: %s\n", err)
 		return
@@ -96,10 +100,8 @@ func (w *objectWorker) Start() {
 				log.Printf("received nil state for object %v", w.obj)
 				continue
 			}
-			objJson, _ := json.Marshal(w.obj)
-			stateJson, _ := json.Marshal(state.Result.ReportedState)
 			conn := w.redis.Get()
-			reply, err := conn.Do("XADD", xaddArgs(w.maxLen, string(objJson), string(stateJson))...)
+			reply, err := conn.Do("XADD", entryArgs(w.maxLen, w.obj, state)...)
 			conn.Close()
 			if err != nil {
 				log.Printf("failed to stream object: object=%v err=%v\n", w.obj, err)
@@ -123,4 +125,12 @@ func xaddArgs(maxLen int, obj, state string) []interface{} {
 		args = append(args, "MAXLEN", "~", maxLen)
 	}
 	return append(args, "*", "object", obj, "state", state)
+}
+
+// entryArgs maps a device state to the XADD arguments of one stream entry:
+// the object and the reported state, each as JSON.
+func entryArgs(maxLen int, obj api.Object, state *api.DevicesStateRes) []interface{} {
+	objJson, _ := json.Marshal(obj)
+	stateJson, _ := json.Marshal(state.Result.ReportedState)
+	return xaddArgs(maxLen, string(objJson), string(stateJson))
 }

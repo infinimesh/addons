@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -69,7 +70,10 @@ type objectWorker struct {
 }
 
 func (w *objectWorker) Start() {
-	ch, err := w.api.GetDevicesStateStream(w.obj.UID)
+	// The stream stops when Start returns, which Stop causes.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := w.api.GetDevicesStateStream(ctx, w.obj.UID)
 	if err != nil {
 		log.Printf("error on get devices state stream: %s\n", err)
 		return
@@ -92,15 +96,7 @@ func (w *objectWorker) Start() {
 				log.Printf("received nil state for object %v", w.obj)
 				continue
 			}
-			j, _ := json.Marshal(state.Result.ReportedState.Data)
-			record := []string{
-				w.obj.UID,
-				w.obj.Name,
-				w.obj.Kind,
-				state.Result.ReportedState.Timestamp,
-				state.Result.ReportedState.Version,
-				string(j),
-			}
+			record := csvRecord(w.obj, state)
 			err := writer.Write(record)
 			if err != nil {
 				log.Printf("failed to write record to csv: %v\n", err)
@@ -113,4 +109,18 @@ func (w *objectWorker) Start() {
 
 func (w *objectWorker) Stop() {
 	close(w.done)
+}
+
+// csvRecord maps a device state to one CSV row: uid, name, kind, timestamp,
+// version and the reported data as JSON.
+func csvRecord(obj api.Object, state *api.DevicesStateRes) []string {
+	j, _ := json.Marshal(state.Result.ReportedState.Data)
+	return []string{
+		obj.UID,
+		obj.Name,
+		obj.Kind,
+		state.Result.ReportedState.Timestamp,
+		state.Result.ReportedState.Version,
+		string(j),
+	}
 }
