@@ -40,12 +40,16 @@ func NewObjectManager(handler api.Handler, workerFactory func(api.Object) Proces
 
 func (i *objectManagerImpl) Start() {
 	log.Println("starting object manager...")
-	i.refreshObjects() // retrieve objects upfront
+	if err := i.refreshObjects(); err != nil { // retrieve objects upfront
+		log.Printf("failed to refresh objects with error: %s\n", err)
+	}
+	t := time.NewTicker(i.objectRefreshInterval)
+	defer t.Stop()
 	for {
 		select {
 		case <-i.done:
-			break
-		case <-time.Tick(i.objectRefreshInterval):
+			return
+		case <-t.C:
 			if err := i.refreshObjects(); err != nil {
 				log.Printf("failed to refresh objects with error: %s\n", err)
 			}

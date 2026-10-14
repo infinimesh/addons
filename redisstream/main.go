@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -81,7 +82,10 @@ type objectWorker struct {
 }
 
 func (w *objectWorker) Start() {
-	ch, err := w.api.GetDevicesStateStream(w.obj.UID)
+	// The stream stops when Start returns, which Stop causes.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := w.api.GetDevicesStateStream(ctx, w.obj.UID)
 	if err != nil {
 		log.Printf("error on get devices state stream: %s\n", err)
 		return
