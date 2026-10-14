@@ -6,13 +6,16 @@ import (
 	"io"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	pb "github.com/infinimesh/proto/node"
 	"github.com/infinimesh/proto/node/access"
 	shadowpb "github.com/infinimesh/proto/shadow"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -256,15 +259,26 @@ func (h *handlerImpl) streamOnce(ctx context.Context, deviceID string, ch chan<-
 }
 
 // StreamNamespace streams all devices of one namespace on one StreamShadow
-// call and reconnects with resume_after. The channel closes when ctx is done.
+// call and reconnects with resume_after. When core closes the stream because
+// it fell behind, or the resume point is outside core's replay window, the
+// events in between are lost; it then logs the gap as an error and reopens
+// with sync so the current shadow of every device is sent again. The channel
+// closes when ctx is done.
 func (h *handlerImpl) StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
 	ret := make(chan *shadowpb.Shadow)
 	go func() {
 		defer close(ret)
 		var last uint64
+		resync := false
 		for {
-			if err := h.streamNamespaceOnce(ctx, namespaceID, include, &last, ret); err != nil && ctx.Err() == nil {
-				log.Printf("namespace %s stream: %s\n", namespaceID, err)
+			err := h.streamNamespaceOnce(ctx, namespaceID, include, &last, &resync, ret)
+			if err != nil && ctx.Err() == nil {
+				if isGap(err) {
+					resync = true
+					log.Printf("ERROR namespace %s stream: events after sequence %d were lost (%s); reopening with sync to send the current state of every device\n", namespaceID, last, err)
+				} else {
+					log.Printf("namespace %s stream: %s\n", namespaceID, err)
+				}
 			}
 			select {
 			case <-ctx.Done():
@@ -276,7 +290,26 @@ func (h *handlerImpl) StreamNamespace(ctx context.Context, namespaceID string, i
 	return ret
 }
 
-func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID string, include []shadowpb.StateKey, last *uint64, ch chan<- *shadowpb.Shadow) error {
+// gapTexts are the messages core uses when a stream lost events. Core sends
+// them as code Unknown with the Aborted text inside for now, so the text is
+// matched as well as the code.
+var gapTexts = []string{"shadow stream fell behind", "resume window exceeded"}
+
+// isGap reports whether err means the stream skipped events.
+func isGap(err error) bool {
+	if st, ok := status.FromError(err); ok && st.Code() == codes.Aborted {
+		return true
+	}
+	msg := err.Error()
+	for _, t := range gapTexts {
+		if strings.Contains(msg, t) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID string, include []shadowpb.StateKey, last *uint64, resync *bool, ch chan<- *shadowpb.Shadow) error {
 	tctx, cancel := h.accountCtx()
 	tok, err := h.devices.MakeDevicesToken(tctx, &pb.DevicesTokenRequest{
 		Namespace: namespaceID,
@@ -289,11 +322,17 @@ func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID strin
 	}
 	sctx, stop := context.WithCancel(withBearer(ctx, tok.GetToken()))
 	defer stop()
-	stream, err := h.shadow.StreamShadow(sctx, &shadowpb.StreamShadowRequest{
+	req := &shadowpb.StreamShadowRequest{
 		Namespace:   namespaceID,
 		Include:     include,
 		ResumeAfter: *last,
-	})
+	}
+	if *resync {
+		// The gap cannot be replayed, so ask for the current state instead.
+		req.Sync = true
+		req.ResumeAfter = 0
+	}
+	stream, err := h.shadow.StreamShadow(sctx, req)
 	if err != nil {
 		return NewFailedRequestError("ShadowService.StreamShadow", err)
 	}
@@ -305,6 +344,9 @@ func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID strin
 		if err != nil {
 			return NewFailedRequestError("ShadowService.StreamShadow", err)
 		}
+		// The sync is done once the stream delivers; until then a reconnect
+		// asks for it again.
+		*resync = false
 		if msg.GetSequence() > *last {
 			*last = msg.GetSequence()
 		}
