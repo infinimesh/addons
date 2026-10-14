@@ -69,7 +69,7 @@ The addon sends `Authorization: Bearer <token>` on `POST /v1/devices/ota:assign`
 |---|---|---|
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | `http://host:port` for plain gRPC, `https://host` or `host:443` for TLS |
-| `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
+| `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again. Each token and its session expire after twice this interval. |
 | `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices |
 
 ## A first addon
