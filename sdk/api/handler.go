@@ -20,13 +20,17 @@ type Handler interface {
 	GetObjects(namespaceID string) (*ObjectsRes, error)
 	GetDevicesStateStream(deviceID string) (<-chan *DevicesStateRes, error)
 	GetDeviceShadowStream(deviceID string) (<-chan *shadowpb.Shadow, error)
+	StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
 }
+
+const streamTokenTTL = 24 * time.Hour
 
 type handlerImpl struct {
 	tokenHandler TokenHandler
 	namespaces   pb.NamespacesServiceClient
 	devices      pb.DevicesServiceClient
 	shadow       pb.ShadowServiceClient
+	retry        time.Duration
 }
 
 // NewHandler returns a Handler that talks to the infinimesh v3 API over gRPC.
@@ -36,6 +40,7 @@ func NewHandler(conn grpc.ClientConnInterface, tokenHandler TokenHandler) Handle
 		namespaces:   pb.NewNamespacesServiceClient(conn),
 		devices:      pb.NewDevicesServiceClient(conn),
 		shadow:       pb.NewShadowServiceClient(conn),
+		retry:        time.Second,
 	}
 }
 
@@ -221,5 +226,66 @@ func (h *handlerImpl) streamOnce(deviceID string, ch chan<- *shadowpb.Shadow) er
 			continue
 		}
 		ch <- msg
+	}
+}
+
+// StreamNamespace streams all devices of one namespace on one StreamShadow
+// call and reconnects with resume_after. The channel closes when ctx is done.
+func (h *handlerImpl) StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
+	ret := make(chan *shadowpb.Shadow)
+	go func() {
+		defer close(ret)
+		var last uint64
+		for {
+			if err := h.streamNamespaceOnce(ctx, namespaceID, include, &last, ret); err != nil && ctx.Err() == nil {
+				log.Printf("namespace %s stream: %s\n", namespaceID, err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(h.retry):
+			}
+		}
+	}()
+	return ret
+}
+
+func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID string, include []shadowpb.StateKey, last *uint64, ch chan<- *shadowpb.Shadow) error {
+	tctx, cancel := h.accountCtx()
+	tok, err := h.devices.MakeDevicesToken(tctx, &pb.DevicesTokenRequest{
+		Namespace: namespaceID,
+		Stream:    true,
+		ExpiresAt: time.Now().Add(streamTokenTTL).Unix(),
+	})
+	cancel()
+	if err != nil {
+		return NewFailedRequestError("DevicesService.MakeDevicesToken", err)
+	}
+	sctx, stop := context.WithCancel(withBearer(ctx, tok.GetToken()))
+	defer stop()
+	stream, err := h.shadow.StreamShadow(sctx, &shadowpb.StreamShadowRequest{
+		Namespace:   namespaceID,
+		Include:     include,
+		ResumeAfter: *last,
+	})
+	if err != nil {
+		return NewFailedRequestError("ShadowService.StreamShadow", err)
+	}
+	for {
+		msg, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return NewFailedRequestError("ShadowService.StreamShadow", err)
+		}
+		if msg.GetSequence() > *last {
+			*last = msg.GetSequence()
+		}
+		select {
+		case ch <- msg:
+		case <-ctx.Done():
+			return nil
+		}
 	}
 }
