@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"strconv"
 	"time"
 
 	pb "github.com/infinimesh/proto/node"
@@ -128,8 +129,8 @@ type DevicesStateResult struct {
 }
 
 type DeviceState struct {
-	// Version is not part of the v3 shadow and is always empty. It stays so
-	// existing sink tables keep their column.
+	// Version is the reported state version from core as a decimal string,
+	// empty when core sent none.
 	Version   string                 `json:"version"`
 	Timestamp string                 `json:"timestamp"`
 	Data      map[string]interface{} `json:"data"`
@@ -143,9 +144,17 @@ func ShadowToState(s *shadowpb.Shadow) *DevicesStateRes {
 		return nil
 	}
 	return &DevicesStateRes{Result: DevicesStateResult{ReportedState: DeviceState{
+		Version:   formatVersion(rep.GetVersion()),
 		Timestamp: formatTimestamp(rep.GetTimestamp()),
 		Data:      rep.GetData().AsMap(),
 	}}}
+}
+
+func formatVersion(v uint64) string {
+	if v == 0 {
+		return ""
+	}
+	return strconv.FormatUint(v, 10)
 }
 
 func formatTimestamp(t *timestamppb.Timestamp) string {
