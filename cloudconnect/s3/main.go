@@ -23,12 +23,21 @@ func main() {
 	svc := s3.NewFromConfig(cfg)
 	// The bucket may already exist, so an error here is not fatal.
 	_, _ = svc.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucketName)})
-	csvprocessor.WalkLoop(func(f *os.File, name string) error {
+	csvprocessor.WalkLoop(uploader(ctx, svc, bucketName))
+}
+
+type putter interface {
+	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
+// uploader puts each spool file into the bucket under its spool name.
+func uploader(ctx context.Context, svc putter, bucketName string) func(f *os.File, name string) error {
+	return func(f *os.File, name string) error {
 		_, err := svc.PutObject(ctx, &s3.PutObjectInput{
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(name),
 			Body:   f,
 		})
 		return err
-	})
+	}
 }
