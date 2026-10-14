@@ -6,109 +6,57 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/infinimesh/addons/sdk/api"
-	"github.com/infinimesh/addons/sdk/config"
-	"github.com/infinimesh/addons/sdk/wrappers"
+	"github.com/infinimesh/addons/sdk/runner"
+	shadowpb "github.com/infinimesh/proto/shadow"
 )
 
 const (
-	envApiUrl   = "API_URL"
-	envUsername = "USERNAME"
-	envPassword = "PASSWORD"
 	envWriteDir = "WRITE_DIR"
 )
 
 func main() {
-	username := os.Getenv(envUsername)
-	password := os.Getenv(envPassword)
-	apiUrl := os.Getenv(envApiUrl)
-	tokenRefresh, err := config.TokenRefresh()
-	if err != nil {
-		log.Fatal(err)
-	}
-	deviceRefresh, err := config.DeviceRefresh()
-	if err != nil {
-		log.Fatal(err)
-	}
-	conn, err := api.Dial(apiUrl)
-	if err != nil {
-		log.Fatalf("failed to set up connection to %s: %s", apiUrl, err)
-	}
-	defer conn.Close()
-	apiHandler := api.NewHandler(conn, api.NewTokenHandler(conn, username, password, tokenRefresh))
-	writeDir := os.Getenv(envWriteDir)
-	wrappers.NewObjectManager(
-		apiHandler,
-		(&objectWorkerFactory{
-			api:      apiHandler,
-			writeDir: writeDir,
-		}).NewObjectWorker,
-		deviceRefresh,
-	).Start()
+	apiHandler, nsRefresh, closeConn := runner.Connect()
+	defer closeConn()
+	runner.Serve(context.Background(), apiHandler, newSink(os.Getenv(envWriteDir)).handle, nsRefresh, shadowpb.StateKey_REPORTED)
 }
 
-type objectWorkerFactory struct {
-	api      api.Handler
+// sink writes reported state updates to one CSV spool folder per device.
+type sink struct {
 	writeDir string
+	mu       sync.Mutex
+	writers  map[string]*writer
 }
 
-func (f *objectWorkerFactory) NewObjectWorker(obj api.Object) wrappers.Process {
-	return &objectWorker{
-		obj:      obj,
-		api:      f.api,
-		writeDir: filepath.Join(f.writeDir, obj.UID),
-		done:     make(chan struct{}),
-	}
+func newSink(writeDir string) *sink {
+	return &sink{writeDir: writeDir, writers: map[string]*writer{}}
 }
 
-type objectWorker struct {
-	obj      api.Object
-	api      api.Handler
-	writeDir string
-	done     chan struct{}
-}
-
-func (w *objectWorker) Start() {
-	// The stream stops when Start returns, which Stop causes.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch, err := w.api.GetDevicesStateStream(ctx, w.obj.UID)
-	if err != nil {
-		log.Printf("error on get devices state stream: %s\n", err)
+func (k *sink) handle(obj api.Object, s *shadowpb.Shadow) {
+	state := api.ShadowToState(s)
+	if state == nil {
 		return
 	}
-
-	err = os.MkdirAll(w.writeDir, os.ModePerm)
-	if err != nil {
-		log.Fatalf("failed to mkdir: %v", err) // this should not happen
-	}
-	writer := &writer{
-		writeDir: w.writeDir,
-	}
-
-	for {
-		select {
-		case <-w.done:
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	w, ok := k.writers[obj.UID]
+	if !ok {
+		dir := filepath.Join(k.writeDir, obj.UID)
+		if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+			log.Printf("failed to mkdir %s: %v\n", dir, err)
 			return
-		case state := <-ch:
-			if state == nil {
-				log.Printf("received nil state for object %v", w.obj)
-				continue
-			}
-			record := csvRecord(w.obj, state)
-			err := writer.Write(record)
-			if err != nil {
-				log.Printf("failed to write record to csv: %v\n", err)
-			} else {
-				log.Printf("successfully wrote record to csv: %v\n", record)
-			}
 		}
+		w = &writer{writeDir: dir}
+		k.writers[obj.UID] = w
 	}
-}
-
-func (w *objectWorker) Stop() {
-	close(w.done)
+	record := csvRecord(obj, state)
+	if err := w.Write(record); err != nil {
+		log.Printf("failed to write record to csv: %v\n", err)
+	} else {
+		log.Printf("successfully wrote record to csv: %v\n", record)
+	}
 }
 
 // csvRecord maps a device state to one CSV row: uid, name, kind, timestamp,

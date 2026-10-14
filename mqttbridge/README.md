@@ -26,7 +26,7 @@ The topic template can use `{device}` (the device id) and `{title}` (the device 
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed namespaces. Devices added to or removed from a namespace are picked up at once from the stream. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `MQTT_BROKER` | | `tcp://host:1883`, `ssl://host:8883`, `ws://host/mqtt` or `wss://host/mqtt` |
 | `MQTT_CLIENT_ID` | `infinimesh-mqttbridge` | MQTT client id. Use a different one for each running copy. |
 | `MQTT_USERNAME`, `MQTT_PASSWORD` | | broker login |

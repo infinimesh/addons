@@ -30,7 +30,7 @@ To check a request, compute the HMAC of the body bytes as received and compare i
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed namespaces. Devices added to or removed from a namespace are picked up at once from the stream. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `WEBHOOK_URL` | | `http` or `https` URL to post to |
 | `WEBHOOK_SECRET` | | key for the signature header. Empty means no signature. |
 | `WEBHOOK_TIMEOUT_SECS` | `10` | timeout for one request, including reading the response |

@@ -55,12 +55,12 @@ The addon sends `Authorization: Bearer <token>` on `POST /v1/devices/ota:assign`
 
 | Package | Use it for |
 |---|---|
-| `sdk/runner` | the whole main loop of a shadow addon: login, token refresh, device list refresh, one worker per device |
+| `sdk/runner` | the whole main loop of a shadow addon: login, token refresh, one shadow stream per namespace that follows added and removed devices (`runner.Serve`), `runnertest` for sink tests |
 | `sdk/message` | `message.New` gives a `*message.Message`, `message.Build` gives the device id and the JSON bytes. `Message.Time()` picks the best timestamp. |
 | `sdk/batch` | queue rows from all devices and write them in batches, keeping them while the target is down |
 | `sdk/config` | read settings: `config.String`, `config.Int`, `config.Bool`, `config.Seconds`, and `config.Env` to swap the environment in tests |
 | `sdk/api` | the gRPC client under all of this, if you need more than the runner gives you |
-| `sdk/wrappers` | start and stop one worker per device, used by the runner |
+| `sdk/wrappers` | start and stop one worker per device (older per-device path, no addon uses it now) |
 | `sdk/stream/consumer` | read the `redisstream` stream, for Redis stream sinks |
 
 `runner.Run` reads these settings for you, and every shadow addon lists them in its README:
@@ -70,7 +70,7 @@ The addon sends `Authorization: Bearer <token>` on `POST /v1/devices/ota:assign`
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | `http://host:port` for plain gRPC, `https://host` or `host:443` for TLS |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again. Each token and its session expire after twice this interval. |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed namespaces; devices are picked up at once from the namespace stream |
 
 ## A first addon
 

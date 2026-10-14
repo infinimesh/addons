@@ -23,7 +23,7 @@ Updates with no fields, such as a desired only update with desired off, are skip
 | `USERNAME`, `PASSWORD` | | infinimesh account |
 | `API_URL` | | infinimesh gRPC address, see the main README |
 | `TOKEN_REFRESH_INTERVAL_SECS` | `3600` | how often to log in again |
-| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed devices. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
+| `DEVICE_REFRESH_INTERVAL_SECS` | `600` | how often to look for new or removed namespaces. Devices added to or removed from a namespace are picked up at once from the stream. The older name `OBJECT_REFRESH_INTERVAL_SECS` also works. |
 | `INFLUX_URL` | | for example `http://influxdb:8086` |
 | `INFLUX_TOKEN` | | API token with write access to the bucket |
 | `INFLUX_ORG` | | organization. InfluxDB 3 ignores it. |

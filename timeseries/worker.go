@@ -1,77 +1,50 @@
 package main
 
 import (
-	"context"
 	"log"
+	"sync"
 
 	redistimeseries "github.com/RedisTimeSeries/redistimeseries-go"
 	"github.com/infinimesh/addons/sdk/api"
-	"github.com/infinimesh/addons/sdk/wrappers"
+	shadowpb "github.com/infinimesh/proto/shadow"
 )
 
-type objectWorkerFactory struct {
-	api         api.Handler
-	redisClient *redistimeseries.Client
+// series is the part of the RedisTimeSeries client the sink uses.
+type series interface {
+	CreateKeyWithOptions(key string, opts redistimeseries.CreateOptions) error
+	AddAutoTsWithOptions(key string, value float64, opts redistimeseries.CreateOptions) (int64, error)
 }
 
-func (f *objectWorkerFactory) NewObjectWorker(obj api.Object) wrappers.Process {
-	return &objectWorker{
-		obj:         obj,
-		api:         f.api,
-		redisClient: f.redisClient,
-		done:        make(chan struct{}),
+// sink adds one sample per numeric reported value.
+type sink struct {
+	client  series
+	mu      sync.Mutex
+	created map[string]bool
+}
+
+func newSink(client series) *sink {
+	return &sink{client: client, created: map[string]bool{}}
+}
+
+func (k *sink) handle(obj api.Object, s *shadowpb.Shadow) {
+	state := api.ShadowToState(s)
+	if state == nil {
+		return
 	}
-}
-
-type objectWorker struct {
-	obj         api.Object
-	api         api.Handler
-	redisClient *redistimeseries.Client
-	done        chan struct{}
-}
-
-func (w *objectWorker) Start() {
-	createOpts := redistimeseries.CreateOptions{Labels: seriesLabels(w.obj)}
-
-	// The stream stops when Start returns, which Stop causes.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch, err := w.api.GetDevicesStateStream(ctx, w.obj.UID)
-	if err != nil {
-		log.Printf("error on get devices state stream: %s\n", err)
-	}
-
-	createdKeys := map[string]bool{}
-
-	for {
-		select {
-		case <-w.done:
-			return
-		case state := <-ch:
-			if state == nil {
-				log.Printf("received nil state for object %v", w.obj)
-				continue
-			}
-			for _, p := range seriesPoints(w.obj, state) {
-				k := p.Key
-				f := p.Value
-				if !createdKeys[k] {
-					_ = w.redisClient.CreateKeyWithOptions(k, createOpts)
-					createdKeys[k] = true
-				}
-				_, err = w.redisClient.AddAutoTsWithOptions(k, f, createOpts)
-				if err != nil {
-					log.Printf("failed to add time series item: %s\n", err)
-					continue
-				}
-				log.Printf("added time series item: object=%v key=%s\n", w.obj, k)
-			}
+	opts := redistimeseries.CreateOptions{Labels: seriesLabels(obj)}
+	for _, p := range seriesPoints(obj, state) {
+		k.mu.Lock()
+		if !k.created[p.Key] {
+			_ = k.client.CreateKeyWithOptions(p.Key, opts)
+			k.created[p.Key] = true
 		}
+		k.mu.Unlock()
+		if _, err := k.client.AddAutoTsWithOptions(p.Key, p.Value, opts); err != nil {
+			log.Printf("failed to add time series item: %s\n", err)
+			continue
+		}
+		log.Printf("added time series item: object=%v key=%s\n", obj, p.Key)
 	}
-}
-
-func (w *objectWorker) Stop() {
-	close(w.done)
 }
 
 // point is one sample: the series key "<data key>:<device uid>" and its value.

@@ -40,11 +40,34 @@ func Run(h Handler) {
 	Serve(context.Background(), handler, h, nsRefresh)
 }
 
+// Connect dials API_URL and logs in with USERNAME and PASSWORD. It returns the
+// API handler, the namespace refresh interval and a close function.
+func Connect() (api.Handler, time.Duration, func()) {
+	tokenRefresh, err := config.TokenRefresh()
+	if err != nil {
+		log.Fatal(err)
+	}
+	nsRefresh, err := config.DeviceRefresh()
+	if err != nil {
+		log.Fatal(err)
+	}
+	apiUrl := config.Env("API_URL")
+	if apiUrl == "" {
+		log.Fatal("API_URL is required")
+	}
+	conn, err := api.Dial(apiUrl)
+	if err != nil {
+		log.Fatalf("failed to set up connection to %s: %s", apiUrl, err)
+	}
+	return api.NewHandler(conn, api.NewTokenHandler(conn, config.Env("USERNAME"), config.Env("PASSWORD"), tokenRefresh)), nsRefresh, func() { conn.Close() }
+}
+
 // Serve opens one StreamNamespace per namespace and calls h for each state
 // update. Devices added to or removed from a namespace are picked up from the
 // stream, so no restart is needed. Namespaces are listed again every
-// nsRefresh. Serve returns when ctx is done and all streams have stopped.
-func Serve(ctx context.Context, a api.Handler, h Handler, nsRefresh time.Duration) {
+// nsRefresh. include picks the state sections to stream; none means all.
+// Serve returns when ctx is done and all streams have stopped.
+func Serve(ctx context.Context, a api.Handler, h Handler, nsRefresh time.Duration, include ...shadowpb.StateKey) {
 	type nsStream struct {
 		cancel context.CancelFunc
 		done   chan struct{}
@@ -73,7 +96,7 @@ func Serve(ctx context.Context, a api.Handler, h Handler, nsRefresh time.Duratio
 			streams[ns.ID] = nsStream{cancel: cancel, done: done}
 			go func(ns api.Namespace) {
 				defer close(done)
-				serveNamespace(sctx, a, ns, h)
+				serveNamespace(sctx, a, ns, h, include)
 			}(ns)
 		}
 		for id, s := range streams {
@@ -97,10 +120,10 @@ func Serve(ctx context.Context, a api.Handler, h Handler, nsRefresh time.Duratio
 	}
 }
 
-func serveNamespace(ctx context.Context, a api.Handler, ns api.Namespace, h Handler) {
+func serveNamespace(ctx context.Context, a api.Handler, ns api.Namespace, h Handler, include []shadowpb.StateKey) {
 	devices := map[string]api.Object{}
 	removed := map[string]bool{}
-	for s := range a.StreamNamespace(ctx, ns.ID, nil) {
+	for s := range a.StreamNamespace(ctx, ns.ID, include) {
 		id := s.GetDevice()
 		if id == "" {
 			continue
