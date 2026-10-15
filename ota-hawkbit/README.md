@@ -4,29 +4,14 @@ Tested on core v3.4.1.
 
 Connects one infinimesh namespace to a hawkBit update server. The device uuid is the hawkBit controller id. A deployment started in hawkBit is written to `desired.ota.version`. `inf ota assign` stores `requested_version`, and this addon assigns the distribution set of that name.
 
-You need Docker, a core v3.4.1 API, and the `inf` CLI.
-
-## Register
-
-Log in as root, create the plugin, and turn OTA on for the namespace. The plugin bearer is printed once.
-
-```bash
-inf login --root
-inf plugins create --kind ota --provider hawkbit --title hawkbit --namespace <namespace>
-inf namespaces update <namespace> --ota --provider hawkbit
+```json
+{
+  "desired": {"ota": {"version": "1.2.0"}},
+  "reported": {"ota": {"status": "installing", "error": "", "updated_at": "2026-10-15T00:00:00Z"}}
+}
 ```
 
-`ota cannot be enabled until an OTA addon is registered` means the plugin does not exist yet. Create it first.
-
-`ota provider requires the addon token` means the call used an account token. `desired.ota.version` is written by this process with `OTA_ADDON_TOKEN`.
-
-`ota provider does not match the namespace` means the namespace provider is not `hawkbit`, or this token belongs to another provider. The process logs that once and leaves the namespace alone.
-
-`token is revoked` means the plugin was rotated, its provider changed, or it was deleted. The process logs `token is revoked; run inf plugins rotate and update the secret` and exits non-zero, including when `OTA_POLL_SECS` is `0`. Run `inf plugins rotate <plugin>`, put the new bearer in `OTA_ADDON_TOKEN`, and start again.
-
-If hawkBit does not answer, the process writes `reported.ota.error` `hawkbit unreachable` and keeps running. It tries the same device again on the next event or poll. It does not post the action twice. A target with no distribution set is not that error, and a later successful read clears `hawkbit unreachable`.
-
-hawkBit 0.9.0 reports `detailStatus` in lowercase. `running` means the server is waiting for the device. Core has no pending status, so that is `reported.ota.status` `idle`. `downloading` and `installing` come from the device's feedback messages. `retrieved` with no installing feedback stays `downloading`. An `ota:request` that arrives while this process is down is deployed after the next start. A hawkBit request that times out is the same outage as a refused connection: `reported.ota.error` `hawkbit unreachable`, and the process stays up. If hawkBit comes back with no targets, the addon creates them again and deploys the pending version.
+You need Docker, a core v3.4.1 API, and the `inf` CLI.
 
 ## Settings
 
@@ -45,7 +30,35 @@ hawkBit 0.9.0 reports `detailStatus` in lowercase. `running` means the server is
 
 hawkBit image: `hawkbit/hawkbit-update-server:0.9.0`. The status table in this addon matches that build.
 
+## Limits
+
+If hawkBit does not answer, the process writes `reported.ota.error` `hawkbit unreachable` and keeps running. It tries the same device again on the next event or poll. It does not post the action twice. A target with no distribution set is not that error, and a later successful read clears `hawkbit unreachable`.
+
+When hawkBit hangs instead of refusing connections, the addon can take about 90 s before it writes `reported.ota.error` `hawkbit unreachable`. It stays up during that time and deploys pending requests once hawkBit answers again. A hawkBit request that times out is the same outage as a refused connection.
+
+If hawkBit comes back with no targets, the addon creates them again and deploys the pending version.
+
+hawkBit 0.9.0 reports `detailStatus` in lowercase. `running` means the server is waiting for the device. Core has no pending status, so that is `reported.ota.status` `idle`. `downloading` and `installing` come from the device's feedback messages. `retrieved` with no installing feedback stays `downloading`. An `ota:request` that arrives while this process is down is deployed after the next start.
+
+A missing distribution set name is written once as `reported.ota.status` `failed` and is not retried.
+
 ## Run
+
+Log in as root, create the plugin, and turn OTA on for the namespace. The plugin bearer is printed once.
+
+```bash
+inf login --root
+inf plugins create --kind ota --provider hawkbit --title hawkbit --namespace <namespace>
+inf namespaces update <namespace> --ota --provider hawkbit
+```
+
+`ota cannot be enabled until an OTA addon is registered` means the plugin does not exist yet. Create it first.
+
+`ota provider requires the addon token` means the call used an account token. `desired.ota.version` is written by this process with `OTA_ADDON_TOKEN`.
+
+`ota provider does not match the namespace` means the namespace provider is not `hawkbit`, or this token belongs to another provider. The process logs that once and leaves the namespace alone.
+
+`token is revoked` means the plugin was rotated, its provider changed, or it was deleted. The process logs `token is revoked; run inf plugins rotate and update the secret` and exits non-zero, including when `OTA_POLL_SECS` is `0`. Run `inf plugins rotate <plugin>`, put the new bearer in `OTA_ADDON_TOKEN`, and start again.
 
 ```bash
 docker compose -f ota-hawkbit/docker-compose.yml up --build
@@ -59,10 +72,6 @@ Assign a version from an account login:
 inf ota assign --namespace <namespace> --device <device> --version <distribution set name>
 ```
 
-The distribution set must already exist in hawkBit. A missing name is written once as `reported.ota.status` `failed` and is not retried.
+The distribution set must already exist in hawkBit.
 
 Apache-2.0.
-
-## Known limits
-
-When hawkBit hangs instead of refusing connections, the addon can take about 90 s before it writes `reported.ota.error` "hawkbit unreachable". It stays up during that time and deploys pending requests once hawkBit answers again.
