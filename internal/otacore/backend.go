@@ -13,6 +13,11 @@ func (e *Unavailable) Error() string {
 	return e.Msg
 }
 
+// Missing is a device the backend no longer has. The local ensured flag is stale.
+type Missing struct{}
+
+func (e *Missing) Error() string { return "target missing" }
+
 // Backend is one OTA system. Ids and idempotency stay in the state file, not the shadow.
 type Backend interface {
 	Name() string

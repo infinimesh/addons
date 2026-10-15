@@ -54,18 +54,21 @@ func (b *backend) Deploy(ctx context.Context, d otacore.Device, version string) 
 	}
 	act, found, err := b.client.latestAction(ctx, d.ID)
 	if err != nil {
-		return down(ctx, err)
+		return lift(ctx, err)
 	}
 	if found && act.DistID == ds.ID {
 		return nil
 	}
-	return down(ctx, b.client.assign(ctx, d.ID, ds))
+	return lift(ctx, b.client.assign(ctx, d.ID, ds))
 }
 
 func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapshot, error) {
 	var snap otacore.Snapshot
 	ds, ok, err := b.client.assigned(ctx, d.ID)
 	if err != nil {
+		if errors.Is(err, errTargetMissing) {
+			return otacore.Snapshot{}, &otacore.Missing{}
+		}
 		return otacore.Snapshot{Error: "hawkbit unreachable"}, nil
 	}
 	if ok {
@@ -73,6 +76,9 @@ func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapsho
 	}
 	act, found, err := b.client.latestAction(ctx, d.ID)
 	if err != nil {
+		if errors.Is(err, errTargetMissing) {
+			return otacore.Snapshot{}, &otacore.Missing{}
+		}
 		return otacore.Snapshot{Error: "hawkbit unreachable"}, nil
 	}
 	if !found {
@@ -93,6 +99,13 @@ func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapsho
 
 func (b *backend) Forget(ctx context.Context, d otacore.Device) error {
 	return down(ctx, b.client.deleteTarget(ctx, d.ID))
+}
+
+func lift(ctx context.Context, err error) error {
+	if errors.Is(err, errTargetMissing) {
+		return &otacore.Missing{}
+	}
+	return down(ctx, err)
 }
 
 func down(ctx context.Context, err error) error {
