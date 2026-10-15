@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +14,9 @@ import (
 	pb "github.com/infinimesh/proto/node"
 	shadowpb "github.com/infinimesh/proto/shadow"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type fakeTokens struct{}
@@ -159,5 +164,55 @@ func TestStreamNamespaceResumesAfterReconnect(t *testing.T) {
 		if !r.GetStream() || r.GetNamespace() != "ns1" || len(r.GetDevices()) != 0 || r.GetExpiresAt() == 0 {
 			t.Errorf("token request = %v, want a namespace stream token with an expiry", r)
 		}
+	}
+}
+
+type refuseDevices struct {
+	pb.DevicesServiceClient
+	called bool
+}
+
+func (f *refuseDevices) MakeDevicesToken(context.Context, *pb.DevicesTokenRequest, ...grpc.CallOption) (*pb.TokenResponse, error) {
+	f.called = true
+	return nil, errors.New("addon token must not mint a devices token")
+}
+
+func TestStreamNamespaceTokenUsesAddonBearer(t *testing.T) {
+	dev := &refuseDevices{}
+	sh := &gapShadow{scripts: []gapScript{
+		{msgs: []*shadowpb.Shadow{{Device: "d1", Sequence: 4}}, err: status.Error(codes.Unauthenticated, "token is revoked")},
+	}}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	h := &handlerImpl{tokenHandler: fakeTokens{}, devices: dev, shadow: sh, retry: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := h.StreamNamespaceToken(ctx, "ns1", "addon-secret", nil)
+	got := recv(t, ch)
+	if got.GetDevice() != "d1" {
+		t.Fatalf("device = %s", got.GetDevice())
+	}
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("stream stayed open after token is revoked")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop")
+	}
+	if dev.called {
+		t.Fatal("MakeDevicesToken was called")
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if len(sh.reqs) != 1 {
+		t.Fatalf("StreamShadow calls = %d, want 1", len(sh.reqs))
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("token is revoked; run inf plugins rotate and update the secret")) {
+		t.Fatalf("log = %q", buf.String())
+	}
+	if bytes.Contains(buf.Bytes(), []byte("addon-secret")) {
+		t.Fatal("log contains the addon token")
 	}
 }

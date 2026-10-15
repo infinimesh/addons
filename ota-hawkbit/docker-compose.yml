@@ -1,0 +1,24 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: ota-hawkbit/Dockerfile
+    environment:
+      - OTA_ADDON_TOKEN=CHANGEME
+      - OTA_NAMESPACE=CHANGEME
+      - API_URL=https://api.example.com
+      - HAWKBIT_URL=http://hawkbit:8080
+      - HAWKBIT_USER=admin
+      - HAWKBIT_PASSWORD=admin
+      - OTA_ALLOW_INSECURE=1
+      - OTA_GROUP_TAGS=canary
+      - OTA_STATE_FILE=/tmp/ota-state.json
+    depends_on:
+      - hawkbit
+    restart: on-failure
+  # hawkBit for trying it out. Delete this service and point HAWKBIT_URL
+  # at your own hawkBit instead.
+  hawkbit:
+    image: hawkbit/hawkbit-update-server:0.9.0
+    ports:
+      - "8080:8080"
