@@ -1,0 +1,16 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: ota-webhook/Dockerfile
+    environment:
+      - OTA_ADDON_TOKEN=CHANGEME
+      - OTA_NAMESPACE=CHANGEME
+      - API_URL=https://api.example.com
+      - OTA_WEBHOOK_URL=https://hook.example/ota
+      - OTA_WEBHOOK_SECRET=CHANGEME
+      - OTA_WEBHOOK_LISTEN=:8080
+      - OTA_STATE_FILE=/tmp/ota-state.json
+    ports:
+      - "8080:8080"
+    restart: on-failure
