@@ -8,8 +8,8 @@ services:
       - OTA_NAMESPACE=CHANGEME
       - API_URL=https://api.example.com
       - HAWKBIT_URL=http://hawkbit:8080
-      - HAWKBIT_USER=admin
-      - HAWKBIT_PASSWORD=admin
+      - HAWKBIT_USER=${HAWKBIT_USER:?set HAWKBIT_USER}
+      - HAWKBIT_PASSWORD=${HAWKBIT_PASSWORD:?set HAWKBIT_PASSWORD}
       - OTA_ALLOW_INSECURE=1
       - OTA_GROUP_TAGS=canary
       - OTA_STATE_FILE=/tmp/ota-state.json
@@ -17,8 +17,12 @@ services:
       - hawkbit
     restart: on-failure
   # hawkBit for trying it out. Delete this service and point HAWKBIT_URL
-  # at your own hawkBit instead.
+  # at your own hawkBit instead. Its built-in admin/admin login is removed
+  # and replaced by HAWKBIT_USER / HAWKBIT_PASSWORD. It listens on
+  # 127.0.0.1 only.
   hawkbit:
     image: hawkbit/hawkbit-update-server:0.9.0
+    environment:
+      - 'SPRING_APPLICATION_JSON={"hawkbit.security.user.admin.tenant":"#{null}","hawkbit.security.user.admin.password":"#{null}","hawkbit.security.user.admin.roles":"#{null}","hawkbit.security.user.${HAWKBIT_USER:?set HAWKBIT_USER}.tenant":"DEFAULT","hawkbit.security.user.${HAWKBIT_USER:?set HAWKBIT_USER}.password":"{noop}${HAWKBIT_PASSWORD:?set HAWKBIT_PASSWORD}","hawkbit.security.user.${HAWKBIT_USER:?set HAWKBIT_USER}.roles":"TENANT_ADMIN"}'
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"

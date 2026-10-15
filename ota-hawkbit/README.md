@@ -22,7 +22,7 @@ You need Docker, a core v3.4.1 API, and the `inf` CLI.
 | `OTA_NAMESPACES` | | comma separated namespaces for a public plugin |
 | `API_URL` | | core gRPC address. `https://api.example` or, with `OTA_ALLOW_INSECURE=1`, `http://api:8000` |
 | `HAWKBIT_URL` | | hawkBit Management API, for example `http://hawkbit:8080` |
-| `HAWKBIT_USER`, `HAWKBIT_PASSWORD` | | Management API login. The image in this folder uses `admin` / `admin` |
+| `HAWKBIT_USER`, `HAWKBIT_PASSWORD` | | Management API login. Required. The compose file also sets this login on its hawkBit and removes hawkBit's built-in `admin` / `admin` |
 | `OTA_ALLOW_INSECURE` | | set to `1` to allow an `http://` `API_URL` or `HAWKBIT_URL`. Without it the process stops with `http:// refused without OTA_ALLOW_INSECURE` |
 | `OTA_GROUP_TAGS` | | device tags copied to hawkBit as `tag-<name>`. Empty keeps only `ns-<namespace>` |
 | `OTA_POLL_SECS` | `15` | seconds between reads of hawkBit. `0` reads only when core sends an event |
@@ -61,10 +61,10 @@ inf namespaces update <namespace> --ota --provider hawkbit
 `token is revoked` means the plugin was rotated, its provider changed, or it was deleted. The process logs `token is revoked; run inf plugins rotate and update the secret` and exits non-zero, including when `OTA_POLL_SECS` is `0`. Run `inf plugins rotate <plugin>`, put the new bearer in `OTA_ADDON_TOKEN`, and start again.
 
 ```bash
-docker compose -f ota-hawkbit/docker-compose.yml up --build
+HAWKBIT_USER=<user> HAWKBIT_PASSWORD=<password> docker compose -f ota-hawkbit/docker-compose.yml up --build
 ```
 
-Set `OTA_ADDON_TOKEN`, `OTA_NAMESPACE`, and `API_URL` in that file first. The compose file starts hawkBit beside the addon so you can try the Management API. Point `HAWKBIT_URL` at your own server and remove the `hawkbit` service when you have one.
+Set `OTA_ADDON_TOKEN`, `OTA_NAMESPACE`, and `API_URL` in that file first, and export `HAWKBIT_USER` and `HAWKBIT_PASSWORD`. Without them compose stops with `required variable HAWKBIT_USER is missing a value`. The hawkBit in the compose file listens on 127.0.0.1:8080 only. The compose file starts hawkBit beside the addon so you can try the Management API. Point `HAWKBIT_URL` at your own server and remove the `hawkbit` service when you have one.
 
 Assign a version from an account login:
 
