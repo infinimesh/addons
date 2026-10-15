@@ -10,6 +10,7 @@ import (
 
 	"github.com/infinimesh/addons/internal/otacore"
 	"github.com/infinimesh/addons/sdk/api"
+	shadowpb "github.com/infinimesh/proto/shadow"
 )
 
 type app struct {
@@ -24,6 +25,12 @@ type app struct {
 	now    func() time.Time
 	lookup func(context.Context, string) (string, error)
 	mu     sync.Mutex
+	held   []heldDevice
+}
+
+type heldDevice struct {
+	ns  string
+	msg *shadowpb.Shadow
 }
 
 func (a *app) Run(ctx context.Context) error {
@@ -79,6 +86,11 @@ func (a *app) Run(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				if err := a.releaseHeld(ctx, ""); err != nil {
+					errc <- err
+					cancel()
+					return
+				}
 				if err := a.refreshURLs(ctx); err != nil {
 					errc <- err
 					cancel()
@@ -161,6 +173,70 @@ func (a *app) setURL(ns, url string) {
 		a.urls = map[string]string{}
 	}
 	a.urls[ns] = url
+}
+
+func (a *app) hold(ns string, msg *shadowpb.Shadow) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.held = append(a.held, heldDevice{ns: ns, msg: msg})
+}
+
+func (a *app) dropHeld(ns string, msg *shadowpb.Shadow) {
+	if msg == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := a.held[:0]
+	for _, h := range a.held {
+		if h.ns == ns && h.msg.GetDevice() == msg.GetDevice() && h.msg.GetTitle() == msg.GetTitle() && sameTags(h.msg.GetTags(), msg.GetTags()) {
+			continue
+		}
+		out = append(out, h)
+	}
+	a.held = out
+}
+
+func (a *app) pastHeld(ns string, msg *shadowpb.Shadow) bool {
+	if msg == nil || msg.GetEventId() == 0 {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	saw := false
+	for _, h := range a.held {
+		if h.ns != ns {
+			continue
+		}
+		saw = true
+		if msg.GetEventId() <= h.msg.GetEventId() {
+			return false
+		}
+	}
+	return saw
+}
+
+func (a *app) releaseHeld(ctx context.Context, ns string) error {
+	a.mu.Lock()
+	var mine, rest []heldDevice
+	for _, h := range a.held {
+		if ns == "" || h.ns == ns {
+			mine = append(mine, h)
+			continue
+		}
+		rest = append(rest, h)
+	}
+	a.held = rest
+	a.mu.Unlock()
+	for _, h := range mine {
+		if a.book.sameDevice(h.ns, h.msg) {
+			continue
+		}
+		if err := a.deliver(ctx, h.ns, h.msg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *app) refreshURLs(ctx context.Context) error {

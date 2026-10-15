@@ -107,8 +107,21 @@ func (a *app) handle(ctx context.Context, ns string, msg *shadowpb.Shadow) error
 	if msg == nil || msg.GetDevice() == "" || !forwardEvent(msg.GetEvent()) {
 		return nil
 	}
-	if msg.GetEvent() == shadowpb.ShadowEvent_DEVICE_ADDED && msg.GetSequence() == 0 && a.book.sameDevice(ns, msg) {
+	if msg.GetEvent() == shadowpb.ShadowEvent_DEVICE_ADDED && a.book.sameDevice(ns, msg) {
+		a.dropHeld(ns, msg)
 		return nil
+	}
+	if msg.GetEvent() == shadowpb.ShadowEvent_DEVICE_ADDED && msg.GetSequence() == 0 && a.book.seqOf(ns) > 0 {
+		a.hold(ns, msg)
+		return nil
+	}
+	if msg.GetEvent() == shadowpb.ShadowEvent_DEVICE_ADDED && msg.GetSequence() > 0 {
+		a.dropHeld(ns, msg)
+	}
+	if a.pastHeld(ns, msg) {
+		if err := a.releaseHeld(ctx, ns); err != nil {
+			return err
+		}
 	}
 	return a.deliver(ctx, ns, msg)
 }
