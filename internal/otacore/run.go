@@ -237,7 +237,32 @@ func (r Runner) keepGoing(ctx context.Context, st *store, d Device, err error) e
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 		return err
 	}
+	var rep *Report
+	if errors.As(err, &rep) {
+		return r.noteReport(ctx, st, d, rep.Status, rep.Msg)
+	}
 	return r.noteDown(ctx, st, d, err.Error())
+}
+
+func (r Runner) noteReport(ctx context.Context, st *store, d Device, status, msg string) error {
+	key := devKey(d.Namespace, d.ID)
+	rec, _ := st.get(key)
+	if rec.Status == status && rec.ErrorSet && rec.Error == msg {
+		return nil
+	}
+	now := r.Now().UTC().Format(time.RFC3339)
+	p := Patch{Device: d.ID, Reported: reportedFields(Fields{
+		Status: status, Error: msg, ErrorSet: true, UpdatedAt: now,
+	})}
+	if err := r.write(ctx, st, d.Namespace, p); err != nil {
+		return err
+	}
+	rec.Namespace = d.Namespace
+	rec.Status = status
+	rec.Error = msg
+	rec.ErrorSet = true
+	st.put(key, rec)
+	return nil
 }
 
 func (r Runner) noteDown(ctx context.Context, st *store, d Device, msg string) error {
