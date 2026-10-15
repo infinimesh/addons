@@ -64,7 +64,7 @@ inf namespaces update <namespace> --ota --provider hawkbit
 HAWKBIT_USER=<user> HAWKBIT_PASSWORD=<password> docker compose -f ota-hawkbit/docker-compose.yml up --build
 ```
 
-Set `OTA_ADDON_TOKEN`, `OTA_NAMESPACE`, and `API_URL` in that file first, and export `HAWKBIT_USER` and `HAWKBIT_PASSWORD`. Without them compose stops with `required variable HAWKBIT_USER is missing a value`. The hawkBit in the compose file listens on 127.0.0.1:8080 only. The compose file starts hawkBit beside the addon so you can try the Management API. Point `HAWKBIT_URL` at your own server and remove the `hawkbit` service when you have one.
+Set `OTA_ADDON_TOKEN`, `OTA_NAMESPACE`, and `API_URL` in that file first, and set `HAWKBIT_USER` and `HAWKBIT_PASSWORD`. Without them compose stops with `required variable HAWKBIT_USER is missing a value`. The hawkBit in the compose file listens on 127.0.0.1:8080 only. The compose file starts hawkBit beside the addon so you can try the Management API. Point `HAWKBIT_URL` at your own server and remove the `hawkbit` service when you have one.
 
 Assign a version from an account login:
 
