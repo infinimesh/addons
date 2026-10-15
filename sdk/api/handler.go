@@ -25,6 +25,7 @@ type Handler interface {
 	GetDevicesStateStream(ctx context.Context, deviceID string) (<-chan *DevicesStateRes, error)
 	GetDeviceShadowStream(ctx context.Context, deviceID string) (<-chan *shadowpb.Shadow, error)
 	StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
+	StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
 }
 
 const streamTokenTTL = 24 * time.Hour
@@ -265,14 +266,29 @@ func (h *handlerImpl) streamOnce(ctx context.Context, deviceID string, ch chan<-
 // with sync so the current shadow of every device is sent again. The channel
 // closes when ctx is done.
 func (h *handlerImpl) StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
+	return h.openNamespace(ctx, namespaceID, include, false, "")
+}
+
+// StreamNamespaceToken is StreamNamespace authenticated with an OTA addon
+// token. That token cannot call MakeDevicesToken, so the bearer is used as-is.
+// A revoked token stops the stream.
+func (h *handlerImpl) StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
+	return h.openNamespace(ctx, namespaceID, include, true, token)
+}
+
+func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey, addon bool, addonToken string) <-chan *shadowpb.Shadow {
 	ret := make(chan *shadowpb.Shadow)
 	go func() {
 		defer close(ret)
 		var last uint64
 		resync := false
 		for {
-			err := h.streamNamespaceOnce(ctx, namespaceID, include, &last, &resync, ret)
+			err := h.streamNamespaceOnce(ctx, namespaceID, include, addon, addonToken, &last, &resync, ret)
 			if err != nil && ctx.Err() == nil {
+				if addon && isRevoked(err) {
+					log.Printf("token is revoked; run inf plugins rotate and update the secret\n")
+					return
+				}
 				if isGap(err) {
 					resync = true
 					log.Printf("ERROR namespace %s stream: events after sequence %d were lost (%s); reopening with sync to send the current state of every device\n", namespaceID, last, err)
@@ -309,18 +325,28 @@ func isGap(err error) bool {
 	return false
 }
 
-func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID string, include []shadowpb.StateKey, last *uint64, resync *bool, ch chan<- *shadowpb.Shadow) error {
-	tctx, cancel := h.accountCtx()
-	tok, err := h.devices.MakeDevicesToken(tctx, &pb.DevicesTokenRequest{
-		Namespace: namespaceID,
-		Stream:    true,
-		ExpiresAt: time.Now().Add(streamTokenTTL).Unix(),
-	})
-	cancel()
-	if err != nil {
-		return NewFailedRequestError("DevicesService.MakeDevicesToken", err)
+func isRevoked(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "token is revoked")
+}
+
+func (h *handlerImpl) streamNamespaceOnce(ctx context.Context, namespaceID string, include []shadowpb.StateKey, addon bool, addonToken string, last *uint64, resync *bool, ch chan<- *shadowpb.Shadow) error {
+	var bearer string
+	if addon {
+		bearer = addonToken
+	} else {
+		tctx, cancel := h.accountCtx()
+		tok, err := h.devices.MakeDevicesToken(tctx, &pb.DevicesTokenRequest{
+			Namespace: namespaceID,
+			Stream:    true,
+			ExpiresAt: time.Now().Add(streamTokenTTL).Unix(),
+		})
+		cancel()
+		if err != nil {
+			return NewFailedRequestError("DevicesService.MakeDevicesToken", err)
+		}
+		bearer = tok.GetToken()
 	}
-	sctx, stop := context.WithCancel(withBearer(ctx, tok.GetToken()))
+	sctx, stop := context.WithCancel(withBearer(ctx, bearer))
 	defer stop()
 	req := &shadowpb.StreamShadowRequest{
 		Namespace:   namespaceID,
