@@ -8,13 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/infinimesh/addons/sdk/api"
 	shadowpb "github.com/infinimesh/proto/shadow"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// StreamOpen is one namespace stream. StreamNamespaceToken is the production opener.
-type StreamOpen func(ctx context.Context, namespace string) <-chan *shadowpb.Shadow
+// StreamOpen is one namespace stream. The error channel receives at most one
+// error when the event channel closes, or it closes with no value.
+// StreamNamespaceToken is the production opener.
+type StreamOpen func(ctx context.Context, namespace string) (<-chan *shadowpb.Shadow, <-chan error)
 
 // Runner watches the namespaces in Settings and calls Backend.
 type Runner struct {
@@ -24,6 +27,9 @@ type Runner struct {
 	Writer   Writer
 	Status   map[string]Mapped
 	Now      func() time.Time
+	// Sleep waits between patch retries. Tests replace it. Nil uses a timer
+	// that stops when ctx is done.
+	Sleep func(ctx context.Context, d time.Duration) error
 	// Poll asks the backend for each known device on this interval.
 	// Zero disables it. hawkBit uses it to mirror a deployment started there.
 	Poll time.Duration
@@ -40,7 +46,7 @@ func (e *SkipDeploy) Error() string {
 	return e.Msg
 }
 
-var errRevoked = errors.New("token is revoked; run inf plugins rotate and update the secret")
+var errRevoked = api.ErrTokenRevoked
 
 // Run reads the state file, streams each namespace, and returns when ctx is
 // done or the addon token is revoked.
@@ -100,12 +106,16 @@ func (r Runner) Run(ctx context.Context) error {
 }
 
 func (r Runner) runNS(ctx context.Context, st *store, ns string) error {
-	for msg := range r.Open(ctx, ns) {
+	ch, errc := r.Open(ctx, ns)
+	for msg := range ch {
 		if err := r.handle(ctx, st, ns, msg); err != nil {
 			return err
 		}
 	}
-	return nil
+	if errc == nil {
+		return nil
+	}
+	return <-errc
 }
 
 func (r Runner) poll(ctx context.Context, st *store) error {
@@ -117,11 +127,8 @@ func (r Runner) poll(ctx context.Context, st *store) error {
 			return nil
 		case <-t.C:
 			for _, d := range st.list() {
-				if err := r.mirror(ctx, st, d, nil); err != nil {
-					if errors.Is(err, errRevoked) || ctx.Err() != nil {
-						return err
-					}
-					log.Printf("namespace %s: %s\n", d.Namespace, err)
+				if err := r.retry(ctx, st, d); err != nil {
+					return err
 				}
 			}
 		}
@@ -139,30 +146,104 @@ func (r Runner) handle(ctx context.Context, st *store, ns string, msg *shadowpb.
 	d := Device{ID: id, Namespace: ns, Title: msg.GetTitle(), Tags: append([]string(nil), msg.GetTags()...)}
 	switch msg.GetEvent() {
 	case shadowpb.ShadowEvent_DEVICE_REMOVED:
-		return r.forget(ctx, st, d)
+		return r.keepGoing(ctx, st, d, r.forget(ctx, st, d))
 	case shadowpb.ShadowEvent_DEVICE_ADDED, shadowpb.ShadowEvent_TAG_ADDED, shadowpb.ShadowEvent_TAG_REMOVED:
-		return r.ensure(ctx, st, d, true)
+		return r.keepGoing(ctx, st, d, r.ensure(ctx, st, d, true))
 	case shadowpb.ShadowEvent_OTA_REQUESTED:
-		if err := r.ensure(ctx, st, d, false); err != nil {
-			return err
-		}
-		if err := r.deploy(ctx, st, d, otaString(msg.GetDesired(), "requested_version")); err != nil {
-			return err
-		}
-		return r.mirror(ctx, st, d, msg)
+		return r.request(ctx, st, d, msg, false)
 	case shadowpb.ShadowEvent_OTA_STATUS_CHANGED:
 		return r.noteReported(st, d, msg)
 	case shadowpb.ShadowEvent_STATE:
-		if err := r.ensure(ctx, st, d, false); err != nil {
-			return err
-		}
-		if err := r.deploy(ctx, st, d, otaString(msg.GetDesired(), "requested_version")); err != nil {
-			return err
-		}
-		return r.mirror(ctx, st, d, msg)
+		return r.request(ctx, st, d, msg, false)
 	default:
 		return nil
 	}
+}
+
+func (r Runner) request(ctx context.Context, st *store, d Device, msg *shadowpb.Shadow, tagsKnown bool) error {
+	version := otaString(msg.GetDesired(), "requested_version")
+	if err := r.keepGoing(ctx, st, d, r.ensure(ctx, st, d, tagsKnown)); err != nil {
+		return err
+	}
+	key := devKey(d.Namespace, d.ID)
+	rec, ok := st.get(key)
+	if !ok || !rec.Ensured {
+		if version != "" {
+			rec.Namespace = d.Namespace
+			rec.Want = version
+			st.put(key, rec)
+		}
+		return nil
+	}
+	if err := r.keepGoing(ctx, st, d, r.deploy(ctx, st, d, version)); err != nil {
+		return err
+	}
+	return r.mirror(ctx, st, d, msg)
+}
+
+func (r Runner) retry(ctx context.Context, st *store, d Device) error {
+	key := devKey(d.Namespace, d.ID)
+	rec, ok := st.get(key)
+	if !ok || st.quiet(d.Namespace) {
+		return nil
+	}
+	if !rec.Ensured || (rec.TagsKnown && !sameTags(rec.Tags, rec.WantTags)) {
+		if err := r.keepGoing(ctx, st, d, r.ensure(ctx, st, d, rec.TagsKnown)); err != nil {
+			return err
+		}
+		rec, _ = st.get(key)
+	}
+	if rec.Want != "" && rec.Ensured {
+		if err := r.keepGoing(ctx, st, d, r.deploy(ctx, st, d, rec.Want)); err != nil {
+			return err
+		}
+		rec, _ = st.get(key)
+	}
+	if !rec.Ensured {
+		return nil
+	}
+	if err := r.mirror(ctx, st, d, nil); err != nil {
+		if errors.Is(err, errRevoked) || ctx.Err() != nil {
+			return err
+		}
+		log.Printf("namespace %s: %s\n", d.Namespace, err)
+	}
+	return nil
+}
+
+func sameTags(a, b []string) bool {
+	add, remove := DiffGroups(a, b)
+	return len(add) == 0 && len(remove) == 0
+}
+
+func (r Runner) keepGoing(ctx context.Context, st *store, d Device, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errRevoked) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return r.noteDown(ctx, st, d, err.Error())
+}
+
+func (r Runner) noteDown(ctx context.Context, st *store, d Device, msg string) error {
+	key := devKey(d.Namespace, d.ID)
+	rec, _ := st.get(key)
+	if rec.ErrorSet && rec.Error == msg {
+		return nil
+	}
+	now := r.Now().UTC().Format(time.RFC3339)
+	p := Patch{Device: d.ID, Reported: reportedFields(Fields{
+		Error: msg, ErrorSet: true, UpdatedAt: now,
+	})}
+	if err := r.write(ctx, st, d.Namespace, p); err != nil {
+		return err
+	}
+	rec.Namespace = d.Namespace
+	rec.Error = msg
+	rec.ErrorSet = true
+	st.put(key, rec)
+	return nil
 }
 
 func devKey(ns, id string) string { return ns + "/" + id }
@@ -174,19 +255,25 @@ func (r Runner) ensure(ctx context.Context, st *store, d Device, tagsKnown bool)
 	key := devKey(d.Namespace, d.ID)
 	rec, _ := st.get(key)
 	rec.Namespace = d.Namespace
+	if tagsKnown {
+		rec.TagsKnown = true
+		rec.WantTags = append([]string(nil), d.Tags...)
+	}
 	if !rec.Ensured {
 		if err := r.Backend.EnsureDevice(ctx, d); err != nil {
+			st.put(key, rec)
 			return err
 		}
 		rec.Ensured = true
 	}
-	if tagsKnown {
-		add, remove := DiffGroups(rec.Tags, d.Tags)
+	if rec.TagsKnown {
+		add, remove := DiffGroups(rec.Tags, rec.WantTags)
 		if len(add) > 0 || len(remove) > 0 {
 			if err := r.Backend.SyncGroup(ctx, d, add, remove); err != nil {
+				st.put(key, rec)
 				return err
 			}
-			rec.Tags = append([]string(nil), d.Tags...)
+			rec.Tags = append([]string(nil), rec.WantTags...)
 		}
 	}
 	st.put(key, rec)
@@ -212,23 +299,28 @@ func (r Runner) deploy(ctx context.Context, st *store, d Device, version string)
 	}
 	key := devKey(d.Namespace, d.ID)
 	rec, _ := st.get(key)
+	rec.Namespace = d.Namespace
+	rec.Want = version
 	idKey := IdempotencyKey(d.ID, version)
 	if rec.Deployed == idKey {
+		rec.Want = ""
+		st.put(key, rec)
 		return nil
 	}
 	if err := r.Backend.Deploy(ctx, d, version); err != nil {
 		var skip *SkipDeploy
 		if errors.As(err, &skip) {
-			rec.Namespace = d.Namespace
+			rec.Want = ""
 			rec.Deployed = idKey
 			rec.Held = true
 			rec.HeldVersion = rec.Desired
 			st.put(key, rec)
 			return r.fail(ctx, st, d, skip.Error())
 		}
+		st.put(key, rec)
 		return err
 	}
-	rec.Namespace = d.Namespace
+	rec.Want = ""
 	rec.Deployed = idKey
 	rec.Held = false
 	rec.SawHold = false
@@ -279,7 +371,7 @@ func (r Runner) mirror(ctx context.Context, st *store, d Device, msg *shadowpb.S
 	}
 	snap, err := r.Backend.Status(ctx, d)
 	if err != nil {
-		return err
+		return r.keepGoing(ctx, st, d, err)
 	}
 	key := devKey(d.Namespace, d.ID)
 	rec, _ := st.get(key)
@@ -402,7 +494,12 @@ func (r Runner) write(ctx context.Context, st *store, ns string, p Patch) error 
 		return nil
 	}
 	var err error
-	for range 3 {
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			if err = r.sleep(ctx, RetryWait(attempt-1, 0)); err != nil {
+				return err
+			}
+		}
 		err = r.Writer.Patch(ctx, p)
 		if err == nil {
 			return nil

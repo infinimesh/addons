@@ -53,6 +53,9 @@ func FromEnv(getenv func(string) string) (Settings, error) {
 	case "1", "true", "TRUE":
 		s.AllowInsecure = true
 	}
+	if err := s.AllowURL(s.APIURL); err != nil {
+		return Settings{}, err
+	}
 	return s, nil
 }
 

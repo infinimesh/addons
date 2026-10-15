@@ -3,6 +3,7 @@ package otacore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -74,7 +75,7 @@ func TestFromEnv(t *testing.T) {
 		"OTA_ADDON_TOKEN": "tok",
 		"OTA_NAMESPACE":   "plant",
 		"OTA_STATE_FILE":  "/tmp/ota.json",
-		"API_URL":         "http://api:8000",
+		"API_URL":         "https://api.example:443",
 	}
 	getenv := func(k string) string { return base[k] }
 	s, err := FromEnv(getenv)
@@ -94,6 +95,11 @@ func TestFromEnv(t *testing.T) {
 	}
 	if err := s.AllowURL("http://hawkbit:8080"); err != nil {
 		t.Fatal(err)
+	}
+	base["OTA_ALLOW_INSECURE"] = ""
+	base["API_URL"] = "http://api:8000"
+	if _, err := FromEnv(getenv); err == nil || !strings.Contains(err.Error(), "OTA_ALLOW_INSECURE") {
+		t.Fatalf("http API_URL error = %v", err)
 	}
 	cases := []map[string]string{
 		{"OTA_NAMESPACE": "plant", "OTA_STATE_FILE": "/tmp/ota.json", "API_URL": "http://api:8000"},
@@ -345,6 +351,154 @@ func TestBackendErrorIsReportedOnce(t *testing.T) {
 	}
 }
 
+func TestBackendDownStaysUp(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{ensureErr: errors.New("dial tcp: connection refused")}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_DEVICE_ADDED, Tags: []string{"canary"}})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 1 || w.patches[0].Reported["error"] != "dial tcp: connection refused" {
+		t.Fatalf("patches = %#v", w.patches)
+	}
+	if b.deploy != 0 || b.ensure != 1 {
+		t.Fatalf("ensure=%d deploy=%d", b.ensure, b.deploy)
+	}
+	b.mu.Lock()
+	b.ensureErr = nil
+	b.mu.Unlock()
+	r.Poll = 20 * time.Millisecond
+	r.Open = script()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.ensure < 2 {
+		t.Fatalf("poll did not retry ensure (%d)", b.ensure)
+	}
+}
+
+func TestDeployDownIsRetried(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{deployErr: errors.New("dial tcp: connection refused")}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(requested("dev", "1.2.0"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 1 || w.count() != 1 || w.patches[0].Reported["error"] != "dial tcp: connection refused" {
+		t.Fatalf("deploy=%d patches=%#v", b.deploy, w.patches)
+	}
+	r.Open = script(requested("dev", "1.2.0"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 2 || w.count() != 1 {
+		t.Fatalf("deploy=%d patches=%d", b.deploy, w.count())
+	}
+}
+
+func TestRequestWhileDownIsRetriedByPoll(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{ensureErr: errors.New("dial tcp: connection refused")}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(requested("dev", "1.2.0"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 0 || b.ensure != 1 {
+		t.Fatalf("ensure=%d deploy=%d", b.ensure, b.deploy)
+	}
+	b.mu.Lock()
+	b.ensureErr = nil
+	b.mu.Unlock()
+	r.Poll = 20 * time.Millisecond
+	r.Open = script()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.ensure < 2 || b.deploy < 1 {
+		t.Fatalf("ensure=%d deploy=%d", b.ensure, b.deploy)
+	}
+}
+
+func TestRevokedStreamStopsTheProcess(t *testing.T) {
+	for _, poll := range []time.Duration{0, 20 * time.Millisecond} {
+		t.Run(poll.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			w := &fakeWriter{}
+			var buf bytes.Buffer
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+			r := testRunner(dir, &fakeBackend{}, w)
+			r.Poll = poll
+			r.Settings.Token = "super-secret"
+			r.Open = func(context.Context, string) (<-chan *shadowpb.Shadow, <-chan error) {
+				ch := make(chan *shadowpb.Shadow)
+				close(ch)
+				errc := make(chan error, 1)
+				errc <- errRevoked
+				close(errc)
+				return ch, errc
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := r.Run(ctx)
+			if !errors.Is(err, errRevoked) {
+				t.Fatalf("err = %v", err)
+			}
+			if !strings.Contains(buf.String(), errRevoked.Error()) || strings.Contains(buf.String(), "super-secret") {
+				t.Fatalf("log = %q", buf.String())
+			}
+		})
+	}
+}
+
+func TestPatchRetriesBackOff(t *testing.T) {
+	dir := t.TempDir()
+	st, err := loadStore(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &fakeWriter{err: errors.New("unavailable"), remain: 2, stop: true}
+	var waits []time.Duration
+	r := testRunner(dir, &fakeBackend{}, w)
+	r.Sleep = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
+	}
+	err = r.write(context.Background(), st, "plant", Patch{Device: "dev", Reported: map[string]any{"status": "idle"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 3 || len(waits) != 2 {
+		t.Fatalf("patches=%d waits=%v", w.count(), waits)
+	}
+	if waits[0] < 200*time.Millisecond || waits[0] >= 250*time.Millisecond {
+		t.Fatalf("first wait %s", waits[0])
+	}
+	if waits[1] < 400*time.Millisecond || waits[1] >= 500*time.Millisecond {
+		t.Fatalf("second wait %s", waits[1])
+	}
+}
+
+func TestSleepStopsWhenContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := (Runner{}).sleep(ctx, time.Minute)
+	if !errors.Is(err, context.Canceled) || time.Since(start) > time.Second {
+		t.Fatalf("err=%v after %s", err, time.Since(start))
+	}
+}
+
 func TestWriterSendsAddonToken(t *testing.T) {
 	c := &fakeShadow{}
 	w := NewWriter(c, "addon-tok")
@@ -374,6 +528,7 @@ type fakeBackend struct {
 	mu        sync.Mutex
 	snap      Snapshot
 	deployErr error
+	ensureErr error
 	ensure    int
 	syncg     int
 	deploy    int
@@ -385,8 +540,9 @@ func (f *fakeBackend) Name() string { return "fake" }
 func (f *fakeBackend) EnsureDevice(context.Context, Device) error {
 	f.mu.Lock()
 	f.ensure++
+	err := f.ensureErr
 	f.mu.Unlock()
-	return nil
+	return err
 }
 
 func (f *fakeBackend) SyncGroup(context.Context, Device, []string, []string) error {
@@ -421,16 +577,22 @@ type fakeWriter struct {
 	mu      sync.Mutex
 	patches []Patch
 	err     error
+	remain  int
+	stop    bool
 }
 
 func (f *fakeWriter) Patch(_ context.Context, p Patch) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.patches = append(f.patches, p)
-	if f.err != nil {
+	if f.remain > 0 {
+		f.remain--
 		return f.err
 	}
-	return nil
+	if f.stop {
+		return nil
+	}
+	return f.err
 }
 
 func (f *fakeWriter) count() int {
@@ -462,9 +624,11 @@ func testRunner(dir string, b *fakeBackend, w *fakeWriter) Runner {
 }
 
 func script(msgs ...*shadowpb.Shadow) StreamOpen {
-	return func(ctx context.Context, _ string) <-chan *shadowpb.Shadow {
+	return func(ctx context.Context, _ string) (<-chan *shadowpb.Shadow, <-chan error) {
 		ch := make(chan *shadowpb.Shadow)
+		errc := make(chan error)
 		go func() {
+			defer close(errc)
 			defer close(ch)
 			for _, m := range msgs {
 				select {
@@ -474,7 +638,7 @@ func script(msgs ...*shadowpb.Shadow) StreamOpen {
 				}
 			}
 		}()
-		return ch
+		return ch, errc
 	}
 }
 

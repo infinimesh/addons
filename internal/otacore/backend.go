@@ -2,6 +2,17 @@ package otacore
 
 import "context"
 
+// Unavailable is a backend that did not answer. The addon writes Msg on
+// reported.ota.error and tries the same work again later.
+type Unavailable struct{ Msg string }
+
+func (e *Unavailable) Error() string {
+	if e == nil || e.Msg == "" {
+		return "unreachable"
+	}
+	return e.Msg
+}
+
 // Backend is one OTA system. Ids and idempotency stay in the state file, not the shadow.
 type Backend interface {
 	Name() string

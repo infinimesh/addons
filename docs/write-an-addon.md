@@ -49,7 +49,7 @@ curl -s -X POST "$API/v1/plugins" \
   -d '{"title":"Hawkbit","kind":"OTA","provider":"hawkbit","public":true}'
 ```
 
-The addon sends `Authorization: Bearer <token>` on patches that set `desired.ota`. A later get returns `token_id` and an empty `token`. Deleting the plugin, or changing its provider, invalidates that token. This is not a call the addon SDK makes. A shadow addon still logs in with `USERNAME` and `PASSWORD`. [`ota-hawkbit`](../ota-hawkbit/README.md) uses the plugin bearer as `OTA_ADDON_TOKEN` and does not log in with an account.
+The addon sends `Authorization: Bearer <token>` on patches that set `desired.ota`. A later get returns `token_id` and an empty `token`. Deleting the plugin, or changing its provider, invalidates that token. This is not a call the addon SDK makes. A shadow addon still logs in with `USERNAME` and `PASSWORD`. [`ota-hawkbit`](../ota-hawkbit/README.md) uses the plugin bearer as `OTA_ADDON_TOKEN` and does not log in with an account. An `http://` `API_URL` needs `OTA_ALLOW_INSECURE=1`, the same as an `http://` hawkBit URL.
 
 ## The SDK
 
