@@ -311,9 +311,10 @@ func (c *client) assigned(ctx context.Context, controller string) (dist, bool, e
 }
 
 type action struct {
-	ID     float64
-	Status string
-	DistID float64
+	ID       float64
+	Status   string
+	DistID   float64
+	Messages []string
 }
 
 func (c *client) latestAction(ctx context.Context, controller string) (action, bool, error) {
@@ -347,7 +348,50 @@ func (c *client) latestAction(ctx context.Context, controller string) (action, b
 			}
 		}
 	}
+	if act.ID != 0 {
+		msgs, err := c.latestMessages(ctx, controller, act.ID)
+		if err != nil {
+			return action{}, false, err
+		}
+		act.Messages = msgs
+	}
 	return act, true, nil
+}
+
+func (c *client) latestMessages(ctx context.Context, controller string, id float64) ([]string, error) {
+	path := fmt.Sprintf("/rest/v1/targets/%s/actions/%.0f/status?limit=1&sort=id:DESC", url.PathEscape(controller), id)
+	code, raw, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if code == http.StatusNotFound {
+		return nil, nil
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("hawkbit action status: %d", code)
+	}
+	rows, err := decodeList(raw)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return messageList(rows[0]["messages"]), nil
+}
+
+func messageList(v any) []string {
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return t
+	default:
+		return nil
+	}
 }
 
 func (c *client) oneAction(ctx context.Context, controller string, id float64) (action, bool, error) {

@@ -26,7 +26,7 @@ inf namespaces update <namespace> --ota --provider hawkbit
 
 If hawkBit does not answer, the process writes `reported.ota.error` `hawkbit unreachable` and keeps running. It tries the same device again on the next event or poll. It does not post the action twice. A target with no distribution set is not that error, and a later successful read clears `hawkbit unreachable`.
 
-hawkBit 0.9.0 reports `detailStatus` in lowercase (`running`, `retrieved`, `finished`). That is what is written to `reported.ota.status`. An `ota:request` that arrives while this process is down is deployed after the next start.
+hawkBit 0.9.0 reports `detailStatus` in lowercase. `running` means the server is waiting for the device. Core has no pending status, so that is `reported.ota.status` `idle`. `downloading` and `installing` come from the device's feedback messages. `retrieved` with no installing feedback stays `downloading`. An `ota:request` that arrives while this process is down is deployed after the next start. A hawkBit request that times out is the same outage as a refused connection: `reported.ota.error` `hawkbit unreachable`, and the process stays up.
 
 ## Settings
 

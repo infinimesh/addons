@@ -15,6 +15,9 @@ var coreStatus = map[string]struct{}{
 
 // MapStatus applies table. The result status has to be one of the five core values.
 func MapStatus(table map[string]Mapped, raw string) (Mapped, bool) {
+	if _, ok := coreStatus[strings.ToLower(raw)]; ok {
+		return Mapped{Status: strings.ToLower(raw)}, true
+	}
 	m, ok := table[raw]
 	if !ok {
 		m, ok = table[strings.ToUpper(raw)]

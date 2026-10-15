@@ -29,7 +29,7 @@ func TestActionStatusMatchesImage(t *testing.T) {
 		"FINISHED":              {Status: "success"},
 		"ERROR":                 {Status: "failed"},
 		"WARNING":               {Status: "installing"},
-		"RUNNING":               {Status: "installing"},
+		"RUNNING":               {Status: "idle"},
 		"CANCELED":              {Status: "idle", Error: "canceled"},
 		"CANCELING":             {Status: "idle", Error: "canceled"},
 		"RETRIEVED":             {Status: "downloading"},
@@ -218,7 +218,7 @@ func TestGroupsAndOneAction(t *testing.T) {
 	}
 	var saw bool
 	for _, p := range w.patches {
-		if p.Reported["status"] == "idle" && p.Reported["error"] == "canceled" {
+		if p.Reported["error"] == "canceled" {
 			saw = true
 		}
 	}
@@ -408,8 +408,8 @@ func TestNoAssignmentAndDetailStatus(t *testing.T) {
 	if err != nil || snap.RawStatus != "running" || snap.Error != "" {
 		t.Fatalf("link snap=%+v err=%v", snap, err)
 	}
-	if _, ok := otacore.MapStatus(ActionStatus, snap.RawStatus); !ok {
-		t.Fatal("running did not map")
+	if got, ok := otacore.MapStatus(ActionStatus, snap.RawStatus); !ok || got.Status != "idle" {
+		t.Fatalf("running mapped %+v", got)
 	}
 	if err := b.Deploy(context.Background(), d, "1.2.0"); err != nil || posts != 0 {
 		t.Fatalf("deploy err=%v posts=%d", err, posts)
@@ -426,6 +426,84 @@ func TestNoAssignmentAndDetailStatus(t *testing.T) {
 	got, ok := otacore.MapStatus(ActionStatus, snap.RawStatus)
 	if !ok || got.Status != "success" {
 		t.Fatalf("finished mapped %+v %v", got, ok)
+	}
+}
+
+func TestDeviceFeedbackSetsInstalling(t *testing.T) {
+	detail := "retrieved"
+	var messages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/assignedDS") && r.Method == http.MethodGet:
+			writeJSON(w, http.StatusOK, map[string]any{"id": 7, "name": "1.2.0"})
+		case strings.HasSuffix(p, "/actions") && r.Method == http.MethodGet:
+			writeJSON(w, http.StatusOK, map[string]any{"content": []any{
+				map[string]any{"id": 4, "status": "pending", "detailStatus": detail},
+			}})
+		case strings.HasSuffix(p, "/status") && r.Method == http.MethodGet:
+			writeJSON(w, http.StatusOK, map[string]any{"content": []any{
+				map[string]any{"type": "running", "messages": messages},
+			}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c, err := newClient(srv.URL, "admin", "s3cret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	b := &backend{client: c}
+	d := otacore.Device{ID: "dev", Namespace: "plant"}
+	messages = []string{"downloading"}
+	snap, err := b.Status(context.Background(), d)
+	if err != nil || snap.RawStatus != "downloading" {
+		t.Fatalf("downloading snap=%+v err=%v", snap, err)
+	}
+	messages = []string{"Update Server: Target retrieved update action.", "installing"}
+	snap, err = b.Status(context.Background(), d)
+	if err != nil || snap.RawStatus != "installing" {
+		t.Fatalf("installing snap=%+v err=%v", snap, err)
+	}
+	detail = "running"
+	messages = nil
+	snap, err = b.Status(context.Background(), d)
+	got, ok := otacore.MapStatus(ActionStatus, snap.RawStatus)
+	if err != nil || snap.RawStatus != "running" || !ok || got.Status != "idle" {
+		t.Fatalf("waiting snap=%+v mapped=%+v err=%v", snap, got, err)
+	}
+	detail = "finished"
+	snap, err = b.Status(context.Background(), d)
+	got, ok = otacore.MapStatus(ActionStatus, snap.RawStatus)
+	if err != nil || !ok || got.Status != "success" {
+		t.Fatalf("success snap=%+v mapped=%+v err=%v", snap, got, err)
+	}
+}
+
+func TestHungHawkbitIsUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	c, err := newClient(srv.URL, "admin", "s3cret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.http.Timeout = 20 * time.Millisecond
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	_, _, err = c.findDist(context.Background(), "fw-1.0.0")
+	err = down(context.Background(), err)
+	var gone *otacore.Unavailable
+	if !errors.As(err, &gone) || gone.Error() != "hawkbit unreachable" {
+		t.Fatalf("err = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(2 * time.Millisecond)
+	if err = down(ctx, context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown err = %v", err)
 	}
 }
 

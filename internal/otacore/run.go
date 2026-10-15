@@ -229,7 +229,12 @@ func (r Runner) keepGoing(ctx context.Context, st *store, d Device, err error) e
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, errRevoked) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, errRevoked) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	// A hawkBit client timeout is also DeadlineExceeded. That is an outage
+	// unless this ctx itself is done.
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 		return err
 	}
 	return r.noteDown(ctx, st, d, err.Error())

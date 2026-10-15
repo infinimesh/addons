@@ -402,6 +402,23 @@ func TestDeployDownIsRetried(t *testing.T) {
 	}
 }
 
+func TestClientTimeoutStaysUp(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{deployErr: context.DeadlineExceeded}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(requested("dev", "1.2.0"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 1 || w.patches[0].Reported["error"] != context.DeadlineExceeded.Error() {
+		t.Fatalf("patches = %#v", w.patches)
+	}
+	if b.deploy != 1 {
+		t.Fatalf("deploy = %d", b.deploy)
+	}
+}
+
 func TestRequestWhileDownIsRetriedByPoll(t *testing.T) {
 	dir := t.TempDir()
 	b := &fakeBackend{ensureErr: errors.New("dial tcp: connection refused")}
