@@ -5,9 +5,12 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/infinimesh/addons/internal/otacore"
 )
+
+var tokenOnce sync.Once
 
 const notRegistered = "not registered in mender"
 
@@ -88,11 +91,11 @@ func (b *backend) Deploy(ctx context.Context, d otacore.Device, version string) 
 	if !ok {
 		return &otacore.Missing{}
 	}
-	rows, err := b.client.history(ctx, id)
+	rows, err := b.deviceRows(ctx, id)
 	if err != nil {
 		return down(ctx, err)
 	}
-	if deployed(rows, version) {
+	if n, ok := newest(rows); ok && n.artifact == version && !badStatus(n.deviceStatus) {
 		return nil
 	}
 	ok, err = b.client.hasArtifact(ctx, version)
@@ -101,6 +104,13 @@ func (b *backend) Deploy(ctx context.Context, d otacore.Device, version string) 
 	}
 	if !ok {
 		return &otacore.SkipDeploy{Msg: "unknown version " + version}
+	}
+	for _, row := range rows {
+		if row.open && row.artifact != version {
+			if err := b.client.abort(ctx, row.id); err != nil {
+				return down(ctx, err)
+			}
+		}
 	}
 	code, err := b.client.createDeployment(ctx, id, version)
 	if err != nil {
@@ -116,28 +126,57 @@ func (b *backend) Deploy(ctx context.Context, d otacore.Device, version string) 
 	}
 }
 
-func deployed(rows []deviceDeployment, version string) bool {
-	for _, row := range rows {
-		if row.Deployment.ArtifactName != version {
-			continue
-		}
-		switch row.Device.Status {
-		case "failure", "aborted", "noartifact", "decommissioned":
-			continue
-		default:
-			if row.Device.Status != "" {
-				return true
-			}
-		}
-	}
-	return false
+type deviceRow struct {
+	id, artifact, created, deviceStatus string
+	open                                bool
 }
 
-func latest(rows []deviceDeployment) (deviceDeployment, bool) {
-	var best deviceDeployment
+func (b *backend) deviceRows(ctx context.Context, menderID string) ([]deviceRow, error) {
+	hist, err := b.client.history(ctx, menderID)
+	if err != nil {
+		return nil, err
+	}
+	opens, err := b.client.openFor(ctx, menderID)
+	if err != nil {
+		return nil, err
+	}
+	var rows []deviceRow
+	seenID := map[string]struct{}{}
+	for _, row := range hist {
+		rows = append(rows, deviceRow{
+			id: row.Deployment.ID, artifact: row.Deployment.ArtifactName,
+			created: row.Deployment.Created, deviceStatus: row.Device.Status,
+		})
+		if row.Deployment.ID != "" {
+			seenID[row.Deployment.ID] = struct{}{}
+		}
+	}
+	for _, row := range opens {
+		if _, ok := seenID[row.ID]; ok {
+			continue
+		}
+		rows = append(rows, deviceRow{
+			id: row.ID, artifact: row.ArtifactName, created: row.Created,
+			deviceStatus: "pending", open: true,
+		})
+	}
+	return rows, nil
+}
+
+func badStatus(status string) bool {
+	switch status {
+	case "failure", "aborted", "noartifact", "decommissioned":
+		return true
+	default:
+		return false
+	}
+}
+
+func newest(rows []deviceRow) (deviceRow, bool) {
+	var best deviceRow
 	var have bool
 	for _, row := range rows {
-		if !have || row.Deployment.Created > best.Deployment.Created {
+		if !have || row.created > best.created {
 			best = row
 			have = true
 		}
@@ -150,7 +189,7 @@ func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapsho
 	if !ok {
 		found, ok, err := b.client.findDevice(ctx, d.ID)
 		if err != nil {
-			return otacore.Snapshot{Error: "mender unreachable"}, nil
+			return otacore.Snapshot{Error: down(ctx, err).Error()}, nil
 		}
 		if !ok {
 			return otacore.Snapshot{RawStatus: "UNREGISTERED"}, nil
@@ -158,18 +197,18 @@ func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapsho
 		id = found
 		b.ids[d.ID] = id
 	}
-	rows, err := b.client.history(ctx, id)
+	rows, err := b.deviceRows(ctx, id)
 	if err != nil {
-		return otacore.Snapshot{Error: "mender unreachable"}, nil
+		return otacore.Snapshot{Error: down(ctx, err).Error()}, nil
 	}
-	row, ok := latest(rows)
+	row, ok := newest(rows)
 	if !ok {
 		return otacore.Snapshot{RawStatus: "pending"}, nil
 	}
-	snap := otacore.Snapshot{Version: row.Deployment.ArtifactName, RawStatus: row.Device.Status}
-	switch row.Device.Status {
+	snap := otacore.Snapshot{Version: row.artifact, RawStatus: row.deviceStatus}
+	switch row.deviceStatus {
 	case "success", "already-installed":
-		snap.ReportedVersion = row.Deployment.ArtifactName
+		snap.ReportedVersion = row.artifact
 	}
 	if m, ok := otacore.MapStatus(DeviceStatus, snap.RawStatus); ok {
 		snap.Error = m.Error
@@ -198,6 +237,10 @@ func down(ctx context.Context, err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 		return err
+	}
+	if errors.Is(err, errToken) {
+		tokenOnce.Do(func() { log.Printf("mender rejected the token\n") })
+		return &otacore.Unavailable{Msg: "mender token rejected"}
 	}
 	return &otacore.Unavailable{Msg: "mender unreachable"}
 }

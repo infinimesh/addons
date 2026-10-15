@@ -16,6 +16,9 @@ import (
 	"github.com/infinimesh/addons/internal/otacore"
 )
 
+// errToken is a 401 or 403 for a personal access token. A login with a user can still refresh.
+var errToken = errors.New("mender rejected the token")
+
 type client struct {
 	base  string
 	user  string
@@ -93,8 +96,11 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 		}
 		if res.StatusCode == http.StatusUnauthorized && c.user != "" {
 			c.token = ""
-			last = errors.New("mender rejected the token")
+			last = errToken
 			continue
+		}
+		if (res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden) && c.user == "" {
+			return 0, nil, errToken
 		}
 		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500 {
 			if res.StatusCode == http.StatusTooManyRequests {
@@ -252,12 +258,20 @@ func (c *client) hasArtifact(ctx context.Context, name string) (bool, error) {
 
 type deviceDeployment struct {
 	Deployment struct {
+		ID           string `json:"id"`
 		ArtifactName string `json:"artifact_name"`
 		Created      string `json:"created"`
 	} `json:"deployment"`
 	Device struct {
 		Status string `json:"status"`
 	} `json:"device"`
+}
+
+type openDeployment struct {
+	ID           string `json:"id"`
+	ArtifactName string `json:"artifact_name"`
+	Created      string `json:"created"`
+	Status       string `json:"status"`
 }
 
 func (c *client) history(ctx context.Context, menderID string) ([]deviceDeployment, error) {
@@ -280,6 +294,88 @@ func (c *client) history(ctx context.Context, menderID string) ([]deviceDeployme
 		return nil, err
 	}
 	return rows, nil
+}
+
+func (c *client) listOpen(ctx context.Context, status string) ([]openDeployment, error) {
+	var all []openDeployment
+	for page := 1; page <= 20; page++ {
+		path := fmt.Sprintf("/api/management/v1/deployments/deployments?status=%s&per_page=500&page=%d&sort=desc", url.QueryEscape(status), page)
+		code, raw, err := c.do(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		if code != http.StatusOK {
+			return nil, fmt.Errorf("mender deployments: %d", code)
+		}
+		var rows []openDeployment
+		if len(bytes.TrimSpace(raw)) > 0 {
+			if err := json.Unmarshal(raw, &rows); err != nil {
+				return nil, err
+			}
+		}
+		all = append(all, rows...)
+		if len(rows) < 500 {
+			break
+		}
+	}
+	return all, nil
+}
+
+func (c *client) deviceIDs(ctx context.Context, deploymentID string) ([]string, error) {
+	path := "/api/management/v1/deployments/deployments/" + url.PathEscape(deploymentID) + "/device_list"
+	code, raw, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if code == http.StatusNotFound {
+		return nil, nil
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("mender device list: %d", code)
+	}
+	var ids []string
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (c *client) openFor(ctx context.Context, menderID string) ([]openDeployment, error) {
+	var out []openDeployment
+	for _, status := range []string{"pending", "inprogress"} {
+		rows, err := c.listOpen(ctx, status)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			ids, err := c.deviceIDs(ctx, row.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range ids {
+				if id == menderID {
+					out = append(out, row)
+					break
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func (c *client) abort(ctx context.Context, deploymentID string) error {
+	path := "/api/management/v1/deployments/deployments/" + url.PathEscape(deploymentID) + "/status"
+	code, _, err := c.do(ctx, http.MethodPut, path, map[string]string{"status": "aborted"})
+	if err != nil {
+		return err
+	}
+	if code == http.StatusNoContent || code == http.StatusNotFound || code == http.StatusConflict {
+		return nil
+	}
+	return fmt.Errorf("mender abort: %d", code)
 }
 
 func (c *client) createDeployment(ctx context.Context, menderID, version string) (int, error) {
