@@ -234,7 +234,7 @@ func TestSnapshotDeviceAddedPostsOnce(t *testing.T) {
 	if err := a.handle(context.Background(), "plant", changed); err != nil {
 		t.Fatal(err)
 	}
-	live := &shadowpb.Shadow{Device: "pump", Namespace: "plant", Title: "Pump 2", Tags: []string{"a", "b"}, EventId: 22, Sequence: 8, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	live := &shadowpb.Shadow{Device: "pump", Namespace: "plant", Title: "Pump 3", Tags: []string{"a", "b"}, EventId: 22, Sequence: 8, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
 	if err := a.handle(context.Background(), "plant", live); err != nil {
 		t.Fatal(err)
 	}
@@ -251,8 +251,88 @@ func TestSnapshotDeviceAddedPostsOnce(t *testing.T) {
 	if !snap.Snapshot || snap.EventID != 21 || snap.Title != "Pump 2" {
 		t.Fatalf("changed snapshot %+v", snap)
 	}
-	if liveDoc.Snapshot || liveDoc.Sequence != 8 {
+	if liveDoc.Snapshot || liveDoc.Sequence != 8 || liveDoc.Title != "Pump 3" {
 		t.Fatalf("live %+v", liveDoc)
+	}
+}
+
+func TestChangeWhileDownPostsOnce(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	a := testApp(t, &fakeWriter{})
+	a.urls["plant"] = srv.URL
+	known := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2", EventId: 12, Sequence: 12, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", known); err != nil {
+		t.Fatal(err)
+	}
+	a.book.advance("plant", 12)
+	bodies = nil
+	snap := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2-renamed", EventId: 14, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	replay := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2-renamed", EventId: 13, Sequence: 13, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", snap); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.handle(context.Background(), "plant", replay); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("posts %d: %s", len(bodies), strings.Join(bodies, "\n"))
+	}
+	var doc outbound
+	if err := json.Unmarshal([]byte(bodies[0]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Snapshot || doc.EventID != 13 || doc.Sequence != 13 || doc.Title != "w2-renamed" {
+		t.Fatalf("doc %+v", doc)
+	}
+}
+
+func TestListEntryWithoutReplayPostsLater(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	a := testApp(t, &fakeWriter{})
+	a.urls["plant"] = srv.URL
+	a.urls["other"] = srv.URL
+	known := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2", EventId: 12, Sequence: 12, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", known); err != nil {
+		t.Fatal(err)
+	}
+	a.book.advance("plant", 12)
+	bodies = nil
+	snap := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2-renamed", EventId: 14, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", snap); err != nil {
+		t.Fatal(err)
+	}
+	other := &shadowpb.Shadow{Device: "valve", Namespace: "other", EventId: 30, Sequence: 4, Event: shadowpb.ShadowEvent_OTA_REQUESTED}
+	if err := a.handle(context.Background(), "other", other); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("posts %d: %s", len(bodies), strings.Join(bodies, "\n"))
+	}
+	later := &shadowpb.Shadow{Device: "pump", Namespace: "plant", EventId: 31, Sequence: 14, Event: shadowpb.ShadowEvent_OTA_REQUESTED}
+	if err := a.handle(context.Background(), "plant", later); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("posts %d: %s", len(bodies), strings.Join(bodies, "\n"))
+	}
+	var doc outbound
+	if err := json.Unmarshal([]byte(bodies[1]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if !doc.Snapshot || doc.EventID != 14 || doc.Title != "w2-renamed" {
+		t.Fatalf("released %+v", doc)
 	}
 }
 
