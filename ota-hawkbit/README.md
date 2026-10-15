@@ -26,7 +26,7 @@ You need Docker, a core v3.4.1 API, and the `inf` CLI.
 | `OTA_ALLOW_INSECURE` | | set to `1` to allow an `http://` `API_URL` or `HAWKBIT_URL`. Without it the process stops with `http:// refused without OTA_ALLOW_INSECURE` |
 | `OTA_GROUP_TAGS` | | device tags copied to hawkBit as `tag-<name>`. Empty keeps only `ns-<namespace>` |
 | `OTA_POLL_SECS` | `15` | seconds between reads of hawkBit. `0` reads only when core sends an event |
-| `OTA_STATE_FILE` | | file of device ids and deploy keys. A restart reads it and does not post the same action again |
+| `OTA_STATE_FILE` | | required. File of device ids and deploy keys. A restart reads it and does not post the same action again |
 
 hawkBit image: `hawkbit/hawkbit-update-server:0.9.0`. The status table in this addon matches that build.
 
@@ -73,5 +73,48 @@ inf ota assign --namespace <namespace> --device <device> --version <distribution
 ```
 
 The distribution set must already exist in hawkBit.
+
+## Let devices log in to hawkBit
+
+Devices report downloading, installing and success to hawkBit, not to this addon. A fresh hawkBit 0.9.0 has target token auth off, so a device that calls the DDI API with `Authorization: TargetToken <token>` gets 401 and `reported.ota.status` stays `idle`. Turn it on with a Management API login:
+
+```bash
+curl -u <user>:<password> -H 'Content-Type: application/json' -X PUT http://localhost:8080/rest/v1/system/configs/authentication.targettoken.enabled -d '{"value":true}'
+```
+
+Then give each device its token. It is the `securityToken` field of:
+
+```bash
+curl -u <user>:<password> http://localhost:8080/rest/v1/targets/<device uuid>
+```
+
+The device calls `GET /DEFAULT/controller/v1/<device uuid>` with `Authorization: TargetToken <securityToken>`. Gateway token auth (`authentication.gatewaytoken.enabled`) works as well if your devices share one token.
+
+## Build and run with Docker
+
+Build the image from the repository root:
+
+```bash
+docker build -f ota-hawkbit/Dockerfile -t ota-hawkbit .
+```
+
+The image runs as user 65532. Make a state folder that user can write, then run the image with the settings from the table above:
+
+```bash
+mkdir -p ota-state
+sudo chown 65532:65532 ota-state
+docker run --rm \
+  -e OTA_ADDON_TOKEN=<plugin bearer> \
+  -e OTA_NAMESPACE=<namespace> \
+  -e API_URL=https://api.example.com \
+  -e HAWKBIT_URL=https://hawkbit.example.com \
+  -e HAWKBIT_USER=<user> \
+  -e HAWKBIT_PASSWORD=<password> \
+  -e OTA_STATE_FILE=/state/ota-state.json \
+  -v "$PWD/ota-state:/state" \
+  ota-hawkbit
+```
+
+`OTA_STATE_FILE` is required. Without it the process stops with `OTA_STATE_FILE is required`. Keeping it on the mounted folder lets a restart reuse the deploy keys.
 
 Apache-2.0.
