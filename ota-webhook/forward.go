@@ -37,6 +37,7 @@ type outbound struct {
 	Tag       string         `json:"tag,omitempty"`
 	Desired   map[string]any `json:"desired,omitempty"`
 	Reported  map[string]any `json:"reported,omitempty"`
+	Snapshot  bool           `json:"snapshot,omitempty"`
 }
 
 func eventDoc(ns string, msg *shadowpb.Shadow) outbound {
@@ -106,6 +107,9 @@ func (a *app) handle(ctx context.Context, ns string, msg *shadowpb.Shadow) error
 	if msg == nil || msg.GetDevice() == "" || !forwardEvent(msg.GetEvent()) {
 		return nil
 	}
+	if msg.GetEvent() == shadowpb.ShadowEvent_DEVICE_ADDED && msg.GetSequence() == 0 && a.book.sameDevice(ns, msg) {
+		return nil
+	}
 	return a.deliver(ctx, ns, msg)
 }
 
@@ -120,13 +124,17 @@ func (a *app) deliver(ctx context.Context, ns string, msg *shadowpb.Shadow) erro
 	if id != 0 {
 		defer a.book.finish(id)
 	}
-	body, err := json.Marshal(eventDoc(ns, msg))
+	doc := eventDoc(ns, msg)
+	if msg.GetEvent() == shadowpb.ShadowEvent_DEVICE_ADDED && msg.GetSequence() == 0 {
+		doc.Snapshot = true
+	}
+	body, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	url := a.urls[ns]
+	url := a.urlOf(ns)
 	if msg.GetNamespace() != "" {
-		if u, ok := a.urls[msg.GetNamespace()]; ok {
+		if u := a.urlOf(msg.GetNamespace()); u != "" {
 			url = u
 		}
 	}
@@ -150,6 +158,7 @@ func (a *app) deliver(ctx context.Context, ns string, msg *shadowpb.Shadow) erro
 	if id != 0 {
 		a.book.markSent(id)
 	}
+	a.book.noteDevice(ns, msg)
 	return nil
 }
 

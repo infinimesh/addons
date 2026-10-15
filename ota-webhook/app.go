@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +22,8 @@ type app struct {
 	post   *poster
 	book   *book
 	now    func() time.Time
+	lookup func(context.Context, string) (string, error)
+	mu     sync.Mutex
 }
 
 func (a *app) Run(ctx context.Context) error {
@@ -51,7 +55,7 @@ func (a *app) Run(ctx context.Context) error {
 	}()
 	a.flush(ctx)
 	var wg sync.WaitGroup
-	for ns := range a.urls {
+	for _, ns := range a.namespaceIDs() {
 		wg.Add(1)
 		go func(ns string) {
 			defer wg.Done()
@@ -61,22 +65,31 @@ func (a *app) Run(ctx context.Context) error {
 			}
 		}(ns)
 	}
-	if a.poll > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			t := time.NewTicker(a.poll)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
+	every := a.poll
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := a.refreshURLs(ctx); err != nil {
+					errc <- err
+					cancel()
 					return
-				case <-t.C:
+				}
+				if a.poll > 0 {
 					a.flush(ctx)
 				}
 			}
-		}()
-	}
+		}
+	}()
 	go func() {
 		wg.Wait()
 		close(errc)
@@ -123,4 +136,56 @@ func newApp(cfg config, book *book, open otacore.StreamOpen, writer otacore.Writ
 
 func openStreams(h api.Handler, token string) otacore.StreamOpen {
 	return otacore.OpenNamespace(h, token)
+}
+
+func (a *app) namespaceIDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.urls))
+	for ns := range a.urls {
+		out = append(out, ns)
+	}
+	return out
+}
+
+func (a *app) urlOf(ns string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.urls[ns]
+}
+
+func (a *app) setURL(ns, url string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.urls == nil {
+		a.urls = map[string]string{}
+	}
+	a.urls[ns] = url
+}
+
+func (a *app) refreshURLs(ctx context.Context) error {
+	if a.lookup == nil {
+		return nil
+	}
+	for _, ns := range a.namespaceIDs() {
+		got, err := a.lookup(ctx, ns)
+		if err != nil {
+			if strings.Contains(err.Error(), "token is revoked") {
+				return api.ErrTokenRevoked
+			}
+			a.book.once(ns, "could not read the namespace webhook_url")
+			continue
+		}
+		got = strings.TrimSpace(got)
+		if got == "" {
+			a.book.once(ns, "webhook_url is required when provider is webhook")
+			continue
+		}
+		if got == a.urlOf(ns) {
+			continue
+		}
+		log.Printf("namespace %s webhook url is %s\n", ns, got)
+		a.setURL(ns, got)
+	}
+	return nil
 }

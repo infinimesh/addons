@@ -29,8 +29,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer conn.Close()
+	lookup := coreURLs{client: pb.NewNamespacesServiceClient(conn), token: cfg.Token}.WebhookURL
+	if err = checkURLs(context.Background(), cfg.URLs, lookup); err != nil {
+		log.Fatal(err)
+	}
 	handler := api.NewHandler(conn, staticToken{})
-	err = newApp(cfg, book, openStreams(handler, cfg.Token), otacore.NewWriter(pb.NewShadowServiceClient(conn), cfg.Token)).Run(context.Background())
+	running := newApp(cfg, book, openStreams(handler, cfg.Token), otacore.NewWriter(pb.NewShadowServiceClient(conn), cfg.Token))
+	running.lookup = lookup
+	err = running.Run(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}

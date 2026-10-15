@@ -29,7 +29,7 @@ You need Docker, a core v3.4.1 API, and the `inf` CLI. This addon is not publish
 | `OTA_POLL_SECS` | `15` | seconds between retries of a post that got a network error, 408, 429, or 5xx. `0` retries only inside the first attempt |
 | `OTA_STATE_FILE` | | file of delivered `event_id` values and posts that still need a retry. A restart does not post an `event_id` again |
 
-The addon token cannot read the namespace document. Set `OTA_WEBHOOK_URL` to the same address stored in `ota.webhook_url`. A namespace whose provider is `webhook` cannot be enabled without that field. Core returns `webhook_url is required when provider is webhook`.
+At startup the process reads `ota.webhook_url` with the addon token. `OTA_WEBHOOK_URL` has to be that same address, or the process stops with `OTA_WEBHOOK_URL does not match the namespace webhook_url`. A later change made with `inf namespaces update --webhook-url` is used on the next poll, or within 15 seconds when `OTA_POLL_SECS` is `0`. A namespace whose provider is `webhook` cannot be enabled without that field. Core returns `webhook_url is required when provider is webhook`.
 
 ## Outbound
 
@@ -40,6 +40,8 @@ Each post is JSON. `event` is `OTA_REQUESTED`, `OTA_TARGET_SET`, `OTA_STATUS_CHA
 ```
 
 `X-Infinimesh-Signature` is `sha256=` and the hex HMAC-SHA256 of the raw body, using `OTA_WEBHOOK_SECRET`. The user agent is `infinimesh-ota-webhook`.
+
+Opening the stream makes core send the current device list as `DEVICE_ADDED` with sequence 0 and a new `event_id`. Those posts are a snapshot. The process keeps each device's id, title, and tags in `OTA_STATE_FILE`. A snapshot is posted only when the device is new or its title or tags changed, and the body has `"snapshot": true`. The same device on the next restart is not posted again. A live `DEVICE_ADDED` has a sequence and is posted even when the device is already known.
 
 A 2xx is success. The same `event_id` is not posted again. A network error, 408, 429, or 5xx is tried again, up to 6 times, waiting 200ms and then doubling up to 30s. After that the post stays in `OTA_STATE_FILE` and is tried on the next poll. A success after those retries is still one delivery.
 

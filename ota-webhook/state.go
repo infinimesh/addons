@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sort"
 	"sync"
+
+	shadowpb "github.com/infinimesh/proto/shadow"
 )
 
 const sentCap = 1024
@@ -15,10 +18,16 @@ type pending struct {
 	Body []byte `json:"body"`
 }
 
+type seenDevice struct {
+	Title string   `json:"title,omitempty"`
+	Tags  []string `json:"tags,omitempty"`
+}
+
 type disk struct {
-	Sent    []uint64          `json:"sent,omitempty"`
-	Pending []pending         `json:"pending,omitempty"`
-	Seq     map[string]uint64 `json:"seq,omitempty"`
+	Sent    []uint64              `json:"sent,omitempty"`
+	Pending []pending             `json:"pending,omitempty"`
+	Seq     map[string]uint64     `json:"seq,omitempty"`
+	Devices map[string]seenDevice `json:"devices,omitempty"`
 }
 
 type book struct {
@@ -30,6 +39,7 @@ type book struct {
 	inflight map[uint64]struct{}
 	seq      map[string]uint64
 	quiet    map[string]struct{}
+	devices  map[string]seenDevice
 }
 
 func loadBook(path string) (*book, error) {
@@ -40,6 +50,7 @@ func loadBook(path string) (*book, error) {
 		inflight: map[uint64]struct{}{},
 		seq:      map[string]uint64{},
 		quiet:    map[string]struct{}{},
+		devices:  map[string]seenDevice{},
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -68,7 +79,72 @@ func loadBook(path string) (*book, error) {
 	if d.Seq != nil {
 		b.seq = d.Seq
 	}
+	if d.Devices != nil {
+		b.devices = d.Devices
+	}
 	return b, nil
+}
+
+func deviceKey(ns, id string) string { return ns + "\n" + id }
+
+func normTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := append([]string(nil), tags...)
+	sort.Strings(out)
+	return out
+}
+
+func sameTags(a, b []string) bool {
+	a, b = normTags(a), normTags(b)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *book) sameDevice(ns string, msg *shadowpb.Shadow) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	name := msg.GetNamespace()
+	if name == "" {
+		name = ns
+	}
+	got, ok := b.devices[deviceKey(name, msg.GetDevice())]
+	return ok && got.Title == msg.GetTitle() && sameTags(got.Tags, msg.GetTags())
+}
+
+func (b *book) noteDevice(ns string, msg *shadowpb.Shadow) {
+	if msg == nil || msg.GetDevice() == "" {
+		return
+	}
+	name := msg.GetNamespace()
+	if name == "" {
+		name = ns
+	}
+	key := deviceKey(name, msg.GetDevice())
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch msg.GetEvent() {
+	case shadowpb.ShadowEvent_DEVICE_REMOVED:
+		delete(b.devices, key)
+	case shadowpb.ShadowEvent_DEVICE_ADDED, shadowpb.ShadowEvent_TAG_ADDED, shadowpb.ShadowEvent_TAG_REMOVED:
+		prev := b.devices[key]
+		title := msg.GetTitle()
+		if title == "" {
+			title = prev.Title
+		}
+		b.devices[key] = seenDevice{Title: title, Tags: normTags(msg.GetTags())}
+	default:
+		return
+	}
+	_ = b.saveLocked()
 }
 
 func (b *book) seqOf(ns string) uint64 {
@@ -171,7 +247,7 @@ func (b *book) once(ns, msg string) {
 }
 
 func (b *book) saveLocked() error {
-	d := disk{Sent: append([]uint64(nil), b.order...), Seq: b.seq}
+	d := disk{Sent: append([]uint64(nil), b.order...), Seq: b.seq, Devices: b.devices}
 	for _, p := range b.pending {
 		d.Pending = append(d.Pending, p)
 	}

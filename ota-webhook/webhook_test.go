@@ -203,6 +203,94 @@ func TestRestartSkipsSentEvent(t *testing.T) {
 	}
 }
 
+func TestSnapshotDeviceAddedPostsOnce(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	book, err := loadBook(dir + "/state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(config{Secret: "secret", URLs: map[string]string{"plant": srv.URL}}, book, nil, &fakeWriter{})
+	first := &shadowpb.Shadow{Device: "pump", Namespace: "plant", Title: "Pump", Tags: []string{"b", "a"}, EventId: 19, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", first); err != nil {
+		t.Fatal(err)
+	}
+	again := &shadowpb.Shadow{Device: "pump", Namespace: "plant", Title: "Pump", Tags: []string{"a", "b"}, EventId: 20, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	reloaded, err := loadBook(dir + "/state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.book = reloaded
+	if err := a.handle(context.Background(), "plant", again); err != nil {
+		t.Fatal(err)
+	}
+	changed := &shadowpb.Shadow{Device: "pump", Namespace: "plant", Title: "Pump 2", Tags: []string{"a", "b"}, EventId: 21, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", changed); err != nil {
+		t.Fatal(err)
+	}
+	live := &shadowpb.Shadow{Device: "pump", Namespace: "plant", Title: "Pump 2", Tags: []string{"a", "b"}, EventId: 22, Sequence: 8, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", live); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("posts %d", len(bodies))
+	}
+	var snap, liveDoc outbound
+	if err := json.Unmarshal([]byte(bodies[1]), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(bodies[2]), &liveDoc); err != nil {
+		t.Fatal(err)
+	}
+	if !snap.Snapshot || snap.EventID != 21 || snap.Title != "Pump 2" {
+		t.Fatalf("changed snapshot %+v", snap)
+	}
+	if liveDoc.Snapshot || liveDoc.Sequence != 8 {
+		t.Fatalf("live %+v", liveDoc)
+	}
+}
+
+func TestWebhookURLMustMatch(t *testing.T) {
+	urls := map[string]string{"plant": "http://host:18092/other"}
+	err := checkURLs(context.Background(), urls, func(context.Context, string) (string, error) {
+		return "http://host:18092/ota", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match the namespace webhook_url") {
+		t.Fatalf("err %v", err)
+	}
+	err = checkURLs(context.Background(), map[string]string{"plant": "http://host:18092/ota"}, func(context.Context, string) (string, error) {
+		return "http://host:18092/ota", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := testApp(t, &fakeWriter{})
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	a.urls["plant"] = srv.URL + "/other"
+	a.lookup = func(context.Context, string) (string, error) { return srv.URL + "/ota", nil }
+	if err := a.refreshURLs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	msg := &shadowpb.Shadow{Device: "pump", EventId: 3, Sequence: 1, Event: shadowpb.ShadowEvent_OTA_REQUESTED}
+	if err := a.deliver(context.Background(), "plant", msg); err != nil {
+		t.Fatal(err)
+	}
+	if got != "/ota" {
+		t.Fatalf("posted to %s", got)
+	}
+}
+
 func TestForwardsMembershipAndOTAEvents(t *testing.T) {
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
