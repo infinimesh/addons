@@ -50,6 +50,9 @@ func TestActionStatusMatchesImage(t *testing.T) {
 		if _, ok := otacore.MapStatus(ActionStatus, name); !ok {
 			t.Fatalf("%s did not map", name)
 		}
+		if _, ok := otacore.MapStatus(ActionStatus, strings.ToLower(name)); !ok {
+			t.Fatalf("lowercase %s did not map", name)
+		}
 	}
 }
 
@@ -338,6 +341,94 @@ func TestUnreachableReportsError(t *testing.T) {
 	}
 }
 
+func TestNoAssignmentAndDetailStatus(t *testing.T) {
+	mode := "empty"
+	var posts, fetches int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/assignedDS") && r.Method == http.MethodGet:
+			if mode == "empty" || mode == "blank" {
+				if mode == "blank" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"id": 7, "name": "1.2.0"})
+		case strings.HasSuffix(p, "/actions") && r.Method == http.MethodGet:
+			if mode == "empty" || mode == "blank" {
+				writeJSON(w, http.StatusOK, map[string]any{"content": []any{}})
+				return
+			}
+			row := map[string]any{"id": 4, "status": "pending", "detailStatus": "running"}
+			if mode == "link" {
+				row["_links"] = map[string]any{"distributionset": map[string]any{"href": srv.URL + "/rest/v1/distributionsets/7"}}
+			}
+			if mode == "finished" {
+				row = map[string]any{"id": 4, "status": "finished"}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"content": []any{row}})
+		case strings.HasSuffix(p, "/actions/4") && r.Method == http.MethodGet:
+			fetches++
+			writeJSON(w, http.StatusOK, map[string]any{
+				"id": 4, "detailStatus": "running",
+				"_links": map[string]any{"distributionset": map[string]any{"href": srv.URL + "/rest/v1/distributionsets/7"}},
+			})
+		case strings.Contains(p, "/distributionsets") && r.Method == http.MethodGet:
+			writeJSON(w, http.StatusOK, map[string]any{"content": []any{map[string]any{"id": 7.0, "name": "1.2.0"}}})
+		case strings.HasSuffix(p, "/assignedDS") && r.Method == http.MethodPost:
+			posts++
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c, err := newClient(srv.URL, "admin", "s3cret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	b := &backend{client: c}
+	d := otacore.Device{ID: "dev", Namespace: "plant"}
+	snap, err := b.Status(context.Background(), d)
+	if err != nil || snap.Error != "" || snap.RawStatus != "SCHEDULED" {
+		t.Fatalf("empty snap=%+v err=%v", snap, err)
+	}
+	mode = "blank"
+	snap, err = b.Status(context.Background(), d)
+	if err != nil || snap.Error != "" {
+		t.Fatalf("blank snap=%+v err=%v", snap, err)
+	}
+	mode = "link"
+	snap, err = b.Status(context.Background(), d)
+	if err != nil || snap.RawStatus != "running" || snap.Error != "" {
+		t.Fatalf("link snap=%+v err=%v", snap, err)
+	}
+	if _, ok := otacore.MapStatus(ActionStatus, snap.RawStatus); !ok {
+		t.Fatal("running did not map")
+	}
+	if err := b.Deploy(context.Background(), d, "1.2.0"); err != nil || posts != 0 {
+		t.Fatalf("deploy err=%v posts=%d", err, posts)
+	}
+	mode = "fetch"
+	if err := b.Deploy(context.Background(), d, "1.2.0"); err != nil || posts != 0 || fetches != 1 {
+		t.Fatalf("fetch deploy err=%v posts=%d fetches=%d", err, posts, fetches)
+	}
+	mode = "finished"
+	snap, err = b.Status(context.Background(), d)
+	if err != nil || snap.RawStatus != "finished" {
+		t.Fatalf("finished snap=%+v err=%v", snap, err)
+	}
+	got, ok := otacore.MapStatus(ActionStatus, snap.RawStatus)
+	if !ok || got.Status != "success" {
+		t.Fatalf("finished mapped %+v %v", got, ok)
+	}
+}
+
 func TestSkipDeployType(t *testing.T) {
 	h := newFakeHawkbit("s3cret")
 	srv := httptest.NewServer(h)
@@ -509,7 +600,7 @@ func (m *memWriter) Patch(_ context.Context, p otacore.Patch) error {
 }
 
 func shadows(msgs ...*shadowpb.Shadow) otacore.StreamOpen {
-	return func(ctx context.Context, _ string) (<-chan *shadowpb.Shadow, <-chan error) {
+	return func(ctx context.Context, _ string, _ uint64) (<-chan *shadowpb.Shadow, <-chan error) {
 		ch := make(chan *shadowpb.Shadow)
 		errc := make(chan error)
 		go func() {

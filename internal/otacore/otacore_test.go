@@ -440,7 +440,7 @@ func TestRevokedStreamStopsTheProcess(t *testing.T) {
 			r := testRunner(dir, &fakeBackend{}, w)
 			r.Poll = poll
 			r.Settings.Token = "super-secret"
-			r.Open = func(context.Context, string) (<-chan *shadowpb.Shadow, <-chan error) {
+			r.Open = func(context.Context, string, uint64) (<-chan *shadowpb.Shadow, <-chan error) {
 				ch := make(chan *shadowpb.Shadow)
 				close(ch)
 				errc := make(chan error, 1)
@@ -496,6 +496,93 @@ func TestSleepStopsWhenContextEnds(t *testing.T) {
 	err := (Runner{}).sleep(ctx, time.Minute)
 	if !errors.Is(err, context.Canceled) || time.Since(start) > time.Second {
 		t.Fatalf("err=%v after %s", err, time.Since(start))
+	}
+}
+
+func TestRequestAlreadySetAtSubscribe(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	msg := requested("dev", "1.2.0")
+	msg.Event = 0
+	msg.Sequence = 8
+	r.Open = script(msg)
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 1 {
+		t.Fatalf("deploy = %d", b.deploy)
+	}
+	var resume uint64
+	r.Open = func(_ context.Context, _ string, got uint64) (<-chan *shadowpb.Shadow, <-chan error) {
+		resume = got
+		return script()(context.Background(), "", got)
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if resume != 8 || b.deploy != 1 {
+		t.Fatalf("resume=%d deploy=%d", resume, b.deploy)
+	}
+}
+
+func TestAddedWithRequestDeploys(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	msg := requested("dev", "1.2.0")
+	msg.Event = shadowpb.ShadowEvent_DEVICE_ADDED
+	r.Open = script(msg)
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 1 || b.ensure != 1 {
+		t.Fatalf("ensure=%d deploy=%d", b.ensure, b.deploy)
+	}
+}
+
+func TestUnknownStatusIsLoggedOnce(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{snap: Snapshot{RawStatus: "nope"}}
+	w := &fakeWriter{}
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	r := testRunner(dir, b, w)
+	r.Open = script(
+		&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_STATE},
+		&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_STATE},
+	)
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(buf.String(), `ota status "nope"`) != 1 {
+		t.Fatalf("log = %q", buf.String())
+	}
+}
+
+func TestSuccessfulStatusClearsTheError(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{snap: Snapshot{Error: "hawkbit unreachable"}}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_STATE})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.patches[len(w.patches)-1].Reported["error"] != "hawkbit unreachable" {
+		t.Fatalf("patches = %#v", w.patches)
+	}
+	b.snap = Snapshot{RawStatus: "success"}
+	r.Open = script(&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_STATE})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	last := w.patches[len(w.patches)-1]
+	if last.Reported["error"] != "" || last.Reported["status"] != "success" {
+		t.Fatalf("last = %#v", last.Reported)
 	}
 }
 
@@ -624,7 +711,7 @@ func testRunner(dir string, b *fakeBackend, w *fakeWriter) Runner {
 }
 
 func script(msgs ...*shadowpb.Shadow) StreamOpen {
-	return func(ctx context.Context, _ string) (<-chan *shadowpb.Shadow, <-chan error) {
+	return func(ctx context.Context, _ string, _ uint64) (<-chan *shadowpb.Shadow, <-chan error) {
 		ch := make(chan *shadowpb.Shadow)
 		errc := make(chan error)
 		go func() {

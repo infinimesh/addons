@@ -2,11 +2,14 @@ package main
 
 import "github.com/infinimesh/addons/internal/otacore"
 
-// Image is the hawkBit build whose Action.Status names this table uses.
+// Image is the hawkBit build this table was checked against.
 const Image = "hawkbit/hawkbit-update-server:0.9.0"
 
-// ActionStatus maps hawkBit action status onto the five core statuses.
+// ActionStatus maps hawkBit 0.9.0 detailStatus onto the five core statuses.
+// The wire value is the lowercase enum name. MapStatus matches either case.
 // CANCELED and CANCELING become idle with error "canceled".
+// status is only pending or finished. finished is the fallback when
+// detailStatus is missing, and it means success.
 var ActionStatus = map[string]otacore.Mapped{
 	"FINISHED":              {Status: "success"},
 	"ERROR":                 {Status: "failed"},

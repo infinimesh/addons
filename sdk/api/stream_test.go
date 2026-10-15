@@ -177,6 +177,40 @@ func (f *refuseDevices) MakeDevicesToken(context.Context, *pb.DevicesTokenReques
 	return nil, errors.New("addon token must not mint a devices token")
 }
 
+func TestAddonStreamSyncsUntilItHasAResumePoint(t *testing.T) {
+	sh := &fakeShadow{streams: [][]*shadowpb.Shadow{{{Device: "d", Sequence: 3}}}}
+	h := &handlerImpl{tokenHandler: fakeTokens{}, devices: &fakeDevices{}, shadow: sh, retry: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, _ := h.StreamNamespaceToken(ctx, "ns1", "tok", nil, 0)
+	if recv(t, ch).GetSequence() != 3 {
+		t.Fatal("sequence")
+	}
+	cancel()
+	for range ch {
+	}
+	sh.mu.Lock()
+	if len(sh.reqs) != 1 || !sh.reqs[0].GetSync() || sh.reqs[0].GetResumeAfter() != 0 {
+		t.Fatalf("first = sync %v resume %d", sh.reqs[0].GetSync(), sh.reqs[0].GetResumeAfter())
+	}
+	sh.mu.Unlock()
+
+	sh = &fakeShadow{streams: [][]*shadowpb.Shadow{{{Device: "d", Sequence: 11}}}}
+	h = &handlerImpl{tokenHandler: fakeTokens{}, devices: &fakeDevices{}, shadow: sh, retry: time.Hour}
+	ctx, cancel = context.WithCancel(context.Background())
+	ch, _ = h.StreamNamespaceToken(ctx, "ns1", "tok", nil, 9)
+	if recv(t, ch).GetSequence() != 11 {
+		t.Fatal("resumed sequence")
+	}
+	cancel()
+	for range ch {
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if len(sh.reqs) != 1 || sh.reqs[0].GetSync() || sh.reqs[0].GetResumeAfter() != 9 {
+		t.Fatalf("resume = sync %v resume %d", sh.reqs[0].GetSync(), sh.reqs[0].GetResumeAfter())
+	}
+}
+
 func TestStreamNamespaceTokenUsesAddonBearer(t *testing.T) {
 	dev := &refuseDevices{}
 	sh := &gapShadow{scripts: []gapScript{
@@ -188,7 +222,7 @@ func TestStreamNamespaceTokenUsesAddonBearer(t *testing.T) {
 	h := &handlerImpl{tokenHandler: fakeTokens{}, devices: dev, shadow: sh, retry: time.Hour}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, errc := h.StreamNamespaceToken(ctx, "ns1", "addon-secret", nil)
+	ch, errc := h.StreamNamespaceToken(ctx, "ns1", "addon-secret", nil, 0)
 	got := recv(t, ch)
 	if got.GetDevice() != "d1" {
 		t.Fatalf("device = %s", got.GetDevice())

@@ -297,7 +297,7 @@ func (c *client) assigned(ctx context.Context, controller string) (dist, bool, e
 	if err != nil {
 		return dist{}, false, err
 	}
-	if code == http.StatusNotFound {
+	if code == http.StatusNotFound || code == http.StatusNoContent {
 		return dist{}, false, nil
 	}
 	if code != http.StatusOK {
@@ -311,6 +311,7 @@ func (c *client) assigned(ctx context.Context, controller string) (dist, bool, e
 }
 
 type action struct {
+	ID     float64
 	Status string
 	DistID float64
 }
@@ -331,9 +332,73 @@ func (c *client) latestAction(ctx context.Context, controller string) (action, b
 	if err != nil || len(rows) == 0 {
 		return action{}, false, err
 	}
-	row := rows[0]
-	ds, _ := row["distributionSet"].(map[string]any)
-	return action{Status: str(row["status"]), DistID: num(ds["id"])}, true, nil
+	act := actionFrom(rows[0])
+	if act.DistID == 0 && act.ID != 0 {
+		one, ok, err := c.oneAction(ctx, controller, act.ID)
+		if err != nil {
+			return action{}, false, err
+		}
+		if ok {
+			if one.DistID != 0 {
+				act.DistID = one.DistID
+			}
+			if act.Status == "" {
+				act.Status = one.Status
+			}
+		}
+	}
+	return act, true, nil
+}
+
+func (c *client) oneAction(ctx context.Context, controller string, id float64) (action, bool, error) {
+	path := fmt.Sprintf("/rest/v1/targets/%s/actions/%.0f", url.PathEscape(controller), id)
+	code, raw, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return action{}, false, err
+	}
+	if code == http.StatusNotFound {
+		return action{}, false, nil
+	}
+	if code != http.StatusOK {
+		return action{}, false, fmt.Errorf("hawkbit action: %d", code)
+	}
+	row, err := decodeOne(raw)
+	if err != nil || row == nil {
+		return action{}, false, err
+	}
+	return actionFrom(row), true, nil
+}
+
+func actionFrom(row map[string]any) action {
+	status := str(row["detailStatus"])
+	if status == "" {
+		status = str(row["status"])
+	}
+	return action{ID: num(row["id"]), Status: status, DistID: distID(row)}
+}
+
+func distID(row map[string]any) float64 {
+	if ds, ok := row["distributionSet"].(map[string]any); ok {
+		if id := num(ds["id"]); id != 0 {
+			return id
+		}
+	}
+	links, _ := row["_links"].(map[string]any)
+	link, _ := links["distributionset"].(map[string]any)
+	return idFromHref(str(link["href"]))
+}
+
+func idFromHref(href string) float64 {
+	href = strings.TrimSpace(strings.TrimRight(href, "/"))
+	i := strings.LastIndex(href, "/")
+	if i < 0 || i == len(href)-1 {
+		return 0
+	}
+	f, err := strconv.ParseFloat(href[i+1:], 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }
 
 func (c *client) assign(ctx context.Context, controller string, ds dist) error {

@@ -25,7 +25,7 @@ type Handler interface {
 	GetDevicesStateStream(ctx context.Context, deviceID string) (<-chan *DevicesStateRes, error)
 	GetDeviceShadowStream(ctx context.Context, deviceID string) (<-chan *shadowpb.Shadow, error)
 	StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
-	StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) (<-chan *shadowpb.Shadow, <-chan error)
+	StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey, resume uint64) (<-chan *shadowpb.Shadow, <-chan error)
 }
 
 // ErrTokenRevoked is the addon bearer after inf plugins rotate, a provider
@@ -270,25 +270,28 @@ func (h *handlerImpl) streamOnce(ctx context.Context, deviceID string, ch chan<-
 // with sync so the current shadow of every device is sent again. The channel
 // closes when ctx is done.
 func (h *handlerImpl) StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
-	ch, _ := h.openNamespace(ctx, namespaceID, include, false, "")
+	ch, _ := h.openNamespace(ctx, namespaceID, include, false, "", 0, false)
 	return ch
 }
 
 // StreamNamespaceToken is StreamNamespace authenticated with an OTA addon
 // token. That token cannot call MakeDevicesToken, so the bearer is used as-is.
 // A revoked token stops the stream and the error channel receives ErrTokenRevoked.
-func (h *handlerImpl) StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) (<-chan *shadowpb.Shadow, <-chan error) {
-	return h.openNamespace(ctx, namespaceID, include, true, token)
+// resume is the last sequence from the state file. Zero asks for a sync of the
+// current shadow, because a new process otherwise misses an ota:request that
+// arrived while it was down.
+func (h *handlerImpl) StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey, resume uint64) (<-chan *shadowpb.Shadow, <-chan error) {
+	return h.openNamespace(ctx, namespaceID, include, true, token, resume, true)
 }
 
-func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey, addon bool, addonToken string) (<-chan *shadowpb.Shadow, <-chan error) {
+func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey, addon bool, addonToken string, resume uint64, syncIfNew bool) (<-chan *shadowpb.Shadow, <-chan error) {
 	ret := make(chan *shadowpb.Shadow)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(ret)
 		defer close(errc)
-		var last uint64
-		resync := false
+		last := resume
+		resync := syncIfNew && resume == 0
 		for {
 			err := h.streamNamespaceOnce(ctx, namespaceID, include, addon, addonToken, &last, &resync, ret)
 			if err != nil && ctx.Err() == nil {
