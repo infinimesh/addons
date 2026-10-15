@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -507,6 +508,59 @@ func TestHungHawkbitIsUnreachable(t *testing.T) {
 	}
 }
 
+func TestEmptyHawkbitRecreatesTheTarget(t *testing.T) {
+	h := newFakeHawkbit("s3cret")
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	c, err := newClient(srv.URL, "admin", "s3cret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state.json")
+	body := []byte(`{"devices":{"plant/dev-1":{"namespace":"plant","ensured":true,"want":"1.2.0","deployed":"dev-1\n1.0.0","error":"hawkbit unreachable","error_set":true}}}`)
+	if err := os.WriteFile(state, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := &memWriter{}
+	r := otacore.Runner{
+		Settings: otacore.Settings{
+			Token:      "addon-token",
+			Namespaces: []string{"plant"},
+			StateFile:  state,
+			APIURL:     "https://api.example.com",
+		},
+		Backend: &backend{client: c},
+		Writer:  w,
+		Status:  ActionStatus,
+		Poll:    20 * time.Millisecond,
+		Now:     func() time.Time { return time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC) },
+		Open:    shadows(),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	_, exists := h.targets["dev-1"]
+	posts := h.assigns
+	h.mu.Unlock()
+	if !exists || posts != 1 {
+		t.Fatalf("target=%v posts=%d", exists, posts)
+	}
+	var cleared bool
+	for _, p := range w.patches {
+		if _, ok := p.Reported["error"]; ok && p.Reported["error"] == "" {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Fatalf("patches = %#v", w.patches)
+	}
+}
+
 func TestSkipDeployType(t *testing.T) {
 	h := newFakeHawkbit("s3cret")
 	srv := httptest.NewServer(h)
@@ -583,13 +637,21 @@ func (h *fakeHawkbit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.targets, parts[3])
 		w.WriteHeader(http.StatusNoContent)
 	case len(parts) == 5 && parts[2] == "targets" && parts[4] == "assignedDS" && r.Method == http.MethodGet:
+		if _, exists := h.targets[parts[3]]; !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		act, ok := h.actions[parts[3]]
 		if !ok {
-			w.WriteHeader(http.StatusNotFound)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": act.DistID, "name": "1.2.0"})
 	case len(parts) == 5 && parts[2] == "targets" && parts[4] == "assignedDS" && r.Method == http.MethodPost:
+		if _, exists := h.targets[parts[3]]; !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		h.assigns++
 		h.lastAssign = string(raw)
 		var rows []map[string]any
@@ -602,6 +664,10 @@ func (h *fakeHawkbit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.actions[parts[3]] = action{Status: "RUNNING", DistID: id}
 		writeJSON(w, http.StatusOK, rows)
 	case len(parts) == 5 && parts[2] == "targets" && parts[4] == "actions" && r.Method == http.MethodGet:
+		if _, exists := h.targets[parts[3]]; !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		act, ok := h.actions[parts[3]]
 		if !ok {
 			writeJSON(w, http.StatusOK, map[string]any{"content": []any{}})

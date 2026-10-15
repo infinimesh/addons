@@ -321,7 +321,16 @@ func (r Runner) deploy(ctx context.Context, st *store, d Device, version string)
 		st.put(key, rec)
 		return nil
 	}
-	if err := r.Backend.Deploy(ctx, d, version); err != nil {
+	err := r.Backend.Deploy(ctx, d, version)
+	if errors.As(err, new(*Missing)) {
+		if err = r.rearm(ctx, st, d); err != nil {
+			return err
+		}
+		rec, _ = st.get(key)
+		rec.Want = version
+		err = r.Backend.Deploy(ctx, d, version)
+	}
+	if err != nil {
 		var skip *SkipDeploy
 		if errors.As(err, &skip) {
 			rec.Want = ""
@@ -341,6 +350,19 @@ func (r Runner) deploy(ctx context.Context, st *store, d Device, version string)
 	rec.HeldVersion = ""
 	st.put(key, rec)
 	return nil
+}
+
+func (r Runner) rearm(ctx context.Context, st *store, d Device) error {
+	key := devKey(d.Namespace, d.ID)
+	rec, _ := st.get(key)
+	rec.Namespace = d.Namespace
+	rec.Ensured = false
+	rec.Deployed = ""
+	rec.Held = false
+	rec.SawHold = false
+	rec.HeldVersion = ""
+	st.put(key, rec)
+	return r.ensure(ctx, st, d, rec.TagsKnown)
 }
 
 func (r Runner) fail(ctx context.Context, st *store, d Device, msg string) error {
@@ -384,6 +406,18 @@ func (r Runner) mirror(ctx context.Context, st *store, d Device, msg *shadowpb.S
 		return nil
 	}
 	snap, err := r.Backend.Status(ctx, d)
+	if errors.As(err, new(*Missing)) {
+		if err = r.rearm(ctx, st, d); err != nil {
+			return r.keepGoing(ctx, st, d, err)
+		}
+		rec, _ := st.get(devKey(d.Namespace, d.ID))
+		if rec.Want != "" {
+			if err = r.deploy(ctx, st, d, rec.Want); err != nil {
+				return r.keepGoing(ctx, st, d, err)
+			}
+		}
+		snap, err = r.Backend.Status(ctx, d)
+	}
 	if err != nil {
 		return r.keepGoing(ctx, st, d, err)
 	}

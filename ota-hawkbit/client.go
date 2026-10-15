@@ -16,6 +16,9 @@ import (
 	"github.com/infinimesh/addons/internal/otacore"
 )
 
+// errTargetMissing is a 404 for the controller. An empty assignment is 204, not this.
+var errTargetMissing = errors.New("hawkbit target missing")
+
 type client struct {
 	base   string
 	user   string
@@ -297,7 +300,10 @@ func (c *client) assigned(ctx context.Context, controller string) (dist, bool, e
 	if err != nil {
 		return dist{}, false, err
 	}
-	if code == http.StatusNotFound || code == http.StatusNoContent {
+	if code == http.StatusNotFound {
+		return dist{}, false, errTargetMissing
+	}
+	if code == http.StatusNoContent {
 		return dist{}, false, nil
 	}
 	if code != http.StatusOK {
@@ -324,7 +330,7 @@ func (c *client) latestAction(ctx context.Context, controller string) (action, b
 		return action{}, false, err
 	}
 	if code == http.StatusNotFound {
-		return action{}, false, nil
+		return action{}, false, errTargetMissing
 	}
 	if code != http.StatusOK {
 		return action{}, false, fmt.Errorf("hawkbit actions: %d", code)
@@ -453,6 +459,9 @@ func (c *client) assign(ctx context.Context, controller string, ds dist) error {
 	}
 	if code == http.StatusOK || code == http.StatusCreated {
 		return nil
+	}
+	if code == http.StatusNotFound {
+		return errTargetMissing
 	}
 	return fmt.Errorf("hawkbit assign %s: %d", ds.Name, code)
 }
