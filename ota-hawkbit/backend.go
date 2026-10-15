@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/infinimesh/addons/internal/otacore"
 )
@@ -18,9 +19,9 @@ func (b *backend) EnsureDevice(ctx context.Context, d otacore.Device) error {
 		name = d.ID
 	}
 	if err := b.client.ensureTarget(ctx, d.ID, name); err != nil {
-		return err
+		return down(err)
 	}
-	return b.client.setTag(ctx, "ns-"+d.Namespace, d.ID, true)
+	return down(b.client.setTag(ctx, "ns-"+d.Namespace, d.ID, true))
 }
 
 func (b *backend) SyncGroup(ctx context.Context, d otacore.Device, add, remove []string) error {
@@ -29,7 +30,7 @@ func (b *backend) SyncGroup(ctx context.Context, d otacore.Device, add, remove [
 			continue
 		}
 		if err := b.client.setTag(ctx, "tag-"+tag, d.ID, true); err != nil {
-			return err
+			return down(err)
 		}
 	}
 	for _, tag := range remove {
@@ -37,7 +38,7 @@ func (b *backend) SyncGroup(ctx context.Context, d otacore.Device, add, remove [
 			continue
 		}
 		if err := b.client.setTag(ctx, "tag-"+tag, d.ID, false); err != nil {
-			return err
+			return down(err)
 		}
 	}
 	return nil
@@ -46,19 +47,19 @@ func (b *backend) SyncGroup(ctx context.Context, d otacore.Device, add, remove [
 func (b *backend) Deploy(ctx context.Context, d otacore.Device, version string) error {
 	ds, ok, err := b.client.findDist(ctx, version)
 	if err != nil {
-		return err
+		return down(err)
 	}
 	if !ok {
 		return &otacore.SkipDeploy{Msg: "unknown version " + version}
 	}
 	act, found, err := b.client.latestAction(ctx, d.ID)
 	if err != nil {
-		return err
+		return down(err)
 	}
 	if found && act.DistID == ds.ID {
 		return nil
 	}
-	return b.client.assign(ctx, d.ID, ds)
+	return down(b.client.assign(ctx, d.ID, ds))
 }
 
 func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapshot, error) {
@@ -88,5 +89,12 @@ func (b *backend) Status(ctx context.Context, d otacore.Device) (otacore.Snapsho
 }
 
 func (b *backend) Forget(ctx context.Context, d otacore.Device) error {
-	return b.client.deleteTarget(ctx, d.ID)
+	return down(b.client.deleteTarget(ctx, d.ID))
+}
+
+func down(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &otacore.Unavailable{Msg: "hawkbit unreachable"}
 }

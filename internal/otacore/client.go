@@ -12,7 +12,7 @@ import (
 // OpenNamespace streams one namespace with the addon token. The resume and
 // sync loop is StreamNamespaceToken.
 func OpenNamespace(h api.Handler, token string) StreamOpen {
-	return func(ctx context.Context, namespace string) <-chan *shadowpb.Shadow {
+	return func(ctx context.Context, namespace string) (<-chan *shadowpb.Shadow, <-chan error) {
 		return h.StreamNamespaceToken(ctx, namespace, token, nil)
 	}
 }

@@ -188,7 +188,7 @@ func TestStreamNamespaceTokenUsesAddonBearer(t *testing.T) {
 	h := &handlerImpl{tokenHandler: fakeTokens{}, devices: dev, shadow: sh, retry: time.Hour}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := h.StreamNamespaceToken(ctx, "ns1", "addon-secret", nil)
+	ch, errc := h.StreamNamespaceToken(ctx, "ns1", "addon-secret", nil)
 	got := recv(t, ch)
 	if got.GetDevice() != "d1" {
 		t.Fatalf("device = %s", got.GetDevice())
@@ -200,6 +200,14 @@ func TestStreamNamespaceTokenUsesAddonBearer(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("stream did not stop")
+	}
+	select {
+	case err := <-errc:
+		if !errors.Is(err, ErrTokenRevoked) {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("revocation was not reported")
 	}
 	if dev.called {
 		t.Fatal("MakeDevicesToken was called")

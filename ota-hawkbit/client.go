@@ -9,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/infinimesh/addons/internal/otacore"
 )
 
 type client struct {
@@ -19,6 +22,7 @@ type client struct {
 	pass   string
 	http   *http.Client
 	groups map[string]struct{}
+	sleep  func(ctx context.Context, d time.Duration) error
 }
 
 func newClient(base, user, pass string, groups []string) (*client, error) {
@@ -52,7 +56,14 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 		payload = b
 	}
 	var last error
+	var retryAfter time.Duration
 	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			if err := c.wait(ctx, otacore.RetryWait(attempt-1, retryAfter)); err != nil {
+				return 0, nil, err
+			}
+		}
+		retryAfter = 0
 		var rdr io.Reader
 		if payload != nil {
 			rdr = bytes.NewReader(payload)
@@ -77,6 +88,9 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 			return res.StatusCode, nil, err
 		}
 		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500 {
+			if res.StatusCode == http.StatusTooManyRequests {
+				retryAfter = retryAfterHeader(res.Header.Get("Retry-After"), time.Now())
+			}
 			last = fmt.Errorf("hawkbit %s %s: %d", method, path, res.StatusCode)
 			continue
 		}
@@ -86,6 +100,42 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 		last = errors.New("hawkbit unreachable")
 	}
 	return 0, nil, last
+}
+
+func (c *client) wait(ctx context.Context, d time.Duration) error {
+	if c.sleep != nil {
+		return c.sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func retryAfterHeader(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		if n < 0 {
+			return 0
+		}
+		return time.Duration(n) * time.Second
+	}
+	t, err := http.ParseTime(v)
+	if err != nil {
+		return 0
+	}
+	d := t.Sub(now)
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 type page struct {

@@ -22,7 +22,9 @@ inf namespaces update <namespace> --ota --provider hawkbit
 
 `ota provider does not match the namespace` means the namespace provider is not `hawkbit`, or this token belongs to another provider. The process logs that once and leaves the namespace alone.
 
-`token is revoked` means the plugin was rotated, its provider changed, or it was deleted. The process stops and logs `token is revoked; run inf plugins rotate and update the secret`. Run `inf plugins rotate <plugin>`, put the new bearer in `OTA_ADDON_TOKEN`, and start again.
+`token is revoked` means the plugin was rotated, its provider changed, or it was deleted. The process logs `token is revoked; run inf plugins rotate and update the secret` and exits non-zero, including when `OTA_POLL_SECS` is `0`. Run `inf plugins rotate <plugin>`, put the new bearer in `OTA_ADDON_TOKEN`, and start again.
+
+If hawkBit does not answer, the process writes `reported.ota.error` `hawkbit unreachable` and keeps running. It tries the same device again on the next event or poll. It does not post the action twice.
 
 ## Settings
 
@@ -31,10 +33,10 @@ inf namespaces update <namespace> --ota --provider hawkbit
 | `OTA_ADDON_TOKEN` | | plugin bearer |
 | `OTA_NAMESPACE` | | one namespace. Use this or `OTA_NAMESPACES`, not both |
 | `OTA_NAMESPACES` | | comma separated namespaces for a public plugin |
-| `API_URL` | | core gRPC address. `http://api:8000` is the compose API |
+| `API_URL` | | core gRPC address. `https://api.example` or, with `OTA_ALLOW_INSECURE=1`, `http://api:8000` |
 | `HAWKBIT_URL` | | hawkBit Management API, for example `http://hawkbit:8080` |
 | `HAWKBIT_USER`, `HAWKBIT_PASSWORD` | | Management API login. The image in this folder uses `admin` / `admin` |
-| `OTA_ALLOW_INSECURE` | | set to `1` when `HAWKBIT_URL` is `http://`. Without it the process stops with `http:// refused without OTA_ALLOW_INSECURE` |
+| `OTA_ALLOW_INSECURE` | | set to `1` to allow an `http://` `API_URL` or `HAWKBIT_URL`. Without it the process stops with `http:// refused without OTA_ALLOW_INSECURE` |
 | `OTA_GROUP_TAGS` | | device tags copied to hawkBit as `tag-<name>`. Empty keeps only `ns-<namespace>` |
 | `OTA_POLL_SECS` | `15` | seconds between reads of hawkBit. `0` reads only when core sends an event |
 | `OTA_STATE_FILE` | | file of device ids and deploy keys. A restart reads it and does not post the same action again |

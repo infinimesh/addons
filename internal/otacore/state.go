@@ -10,6 +10,9 @@ import (
 type devState struct {
 	Namespace   string   `json:"namespace"`
 	Tags        []string `json:"tags,omitempty"`
+	WantTags    []string `json:"want_tags,omitempty"`
+	TagsKnown   bool     `json:"tags_known,omitempty"`
+	Want        string   `json:"want,omitempty"`
 	Ensured     bool     `json:"ensured"`
 	Deployed    string   `json:"deployed,omitempty"`
 	Held        bool     `json:"held,omitempty"`
@@ -85,6 +88,7 @@ func (s *store) get(key string) (devState, bool) {
 		return devState{}, false
 	}
 	d.Tags = append([]string(nil), d.Tags...)
+	d.WantTags = append([]string(nil), d.WantTags...)
 	return d, true
 }
 
@@ -92,6 +96,7 @@ func (s *store) put(key string, d devState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d.Tags = append([]string(nil), d.Tags...)
+	d.WantTags = append([]string(nil), d.WantTags...)
 	s.Devices[key] = d
 	_ = s.saveLocked()
 }
@@ -101,15 +106,16 @@ func (s *store) list() []Device {
 	defer s.mu.Unlock()
 	out := make([]Device, 0, len(s.Devices))
 	for key, d := range s.Devices {
-		if !d.Ensured {
-			continue
-		}
 		id := key
 		if i := strings.LastIndex(key, "/"); i >= 0 {
 			id = key[i+1:]
 		}
+		tags := d.Tags
+		if d.TagsKnown {
+			tags = d.WantTags
+		}
 		out = append(out, Device{
-			ID: id, Namespace: d.Namespace, Tags: append([]string(nil), d.Tags...),
+			ID: id, Namespace: d.Namespace, Tags: append([]string(nil), tags...),
 		})
 	}
 	return out

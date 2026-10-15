@@ -25,8 +25,12 @@ type Handler interface {
 	GetDevicesStateStream(ctx context.Context, deviceID string) (<-chan *DevicesStateRes, error)
 	GetDeviceShadowStream(ctx context.Context, deviceID string) (<-chan *shadowpb.Shadow, error)
 	StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
-	StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow
+	StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) (<-chan *shadowpb.Shadow, <-chan error)
 }
+
+// ErrTokenRevoked is the addon bearer after inf plugins rotate, a provider
+// change, or plugin deletion.
+var ErrTokenRevoked = errors.New("token is revoked; run inf plugins rotate and update the secret")
 
 const streamTokenTTL = 24 * time.Hour
 
@@ -266,27 +270,31 @@ func (h *handlerImpl) streamOnce(ctx context.Context, deviceID string, ch chan<-
 // with sync so the current shadow of every device is sent again. The channel
 // closes when ctx is done.
 func (h *handlerImpl) StreamNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
-	return h.openNamespace(ctx, namespaceID, include, false, "")
+	ch, _ := h.openNamespace(ctx, namespaceID, include, false, "")
+	return ch
 }
 
 // StreamNamespaceToken is StreamNamespace authenticated with an OTA addon
 // token. That token cannot call MakeDevicesToken, so the bearer is used as-is.
-// A revoked token stops the stream.
-func (h *handlerImpl) StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) <-chan *shadowpb.Shadow {
+// A revoked token stops the stream and the error channel receives ErrTokenRevoked.
+func (h *handlerImpl) StreamNamespaceToken(ctx context.Context, namespaceID, token string, include []shadowpb.StateKey) (<-chan *shadowpb.Shadow, <-chan error) {
 	return h.openNamespace(ctx, namespaceID, include, true, token)
 }
 
-func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey, addon bool, addonToken string) <-chan *shadowpb.Shadow {
+func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, include []shadowpb.StateKey, addon bool, addonToken string) (<-chan *shadowpb.Shadow, <-chan error) {
 	ret := make(chan *shadowpb.Shadow)
+	errc := make(chan error, 1)
 	go func() {
 		defer close(ret)
+		defer close(errc)
 		var last uint64
 		resync := false
 		for {
 			err := h.streamNamespaceOnce(ctx, namespaceID, include, addon, addonToken, &last, &resync, ret)
 			if err != nil && ctx.Err() == nil {
 				if addon && isRevoked(err) {
-					log.Printf("token is revoked; run inf plugins rotate and update the secret\n")
+					log.Printf("%s\n", ErrTokenRevoked.Error())
+					errc <- ErrTokenRevoked
 					return
 				}
 				if isGap(err) {
@@ -303,7 +311,7 @@ func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, inc
 			}
 		}
 	}()
-	return ret
+	return ret, errc
 }
 
 // gapTexts are the messages core uses when a stream lost events. Core sends

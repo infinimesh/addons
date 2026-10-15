@@ -87,6 +87,7 @@ func TestRetrySendsTheSameBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
 	code, _, err := c.do(context.Background(), http.MethodPost, "/rest/v1/targets", []map[string]string{{
 		"controllerId": "dev",
 		"name":         "pump",
@@ -247,6 +248,81 @@ func TestGroupsAndOneAction(t *testing.T) {
 	}
 }
 
+func TestRetryAfterAndCancel(t *testing.T) {
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.Header().Set("Retry-After", "3")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	c, err := newClient(srv.URL, "admin", "s3cret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var waits []time.Duration
+	c.sleep = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
+	}
+	code, _, err := c.do(context.Background(), http.MethodPost, "/rest/v1/targets", []map[string]string{{"controllerId": "dev", "name": "pump"}})
+	if err != nil || code != http.StatusCreated {
+		t.Fatalf("code=%d err=%v", code, err)
+	}
+	if len(waits) != 1 || waits[0] < 3*time.Second || waits[0] >= 4*time.Second {
+		t.Fatalf("waits = %v", waits)
+	}
+	n = 0
+	c.sleep = func(context.Context, time.Duration) error { return context.Canceled }
+	_, _, err = c.do(context.Background(), http.MethodGet, "/rest/v1/targets/dev", nil)
+	if !errors.Is(err, context.Canceled) || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+}
+
+func TestOutageStaysUp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	c, err := newClient(url, "admin", "s3cret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	dir := t.TempDir()
+	w := &memWriter{}
+	r := otacore.Runner{
+		Settings: otacore.Settings{
+			Token: "addon-token", Namespaces: []string{"plant"},
+			StateFile: filepath.Join(dir, "state.json"), APIURL: "https://api.example",
+		},
+		Backend: &backend{client: c},
+		Writer:  w,
+		Open:    shadows(&shadowpb.Shadow{Device: "dev-1", Event: shadowpb.ShadowEvent_DEVICE_ADDED}),
+		Status:  ActionStatus,
+		Now:     func() time.Time { return time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC) },
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.patches) != 1 || w.patches[0].Reported["error"] != "hawkbit unreachable" {
+		t.Fatalf("patches = %#v", w.patches)
+	}
+	if strings.Contains(fmtSprint(w.patches), "s3cret") {
+		t.Fatal("patch contains the password")
+	}
+}
+
+func fmtSprint(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
 func TestUnreachableReportsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	url := srv.URL
@@ -255,6 +331,7 @@ func TestUnreachableReportsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
 	snap, err := (&backend{client: c}).Status(context.Background(), otacore.Device{ID: "dev"})
 	if err != nil || snap.Error != "hawkbit unreachable" {
 		t.Fatalf("snap=%+v err=%v", snap, err)
@@ -432,9 +509,11 @@ func (m *memWriter) Patch(_ context.Context, p otacore.Patch) error {
 }
 
 func shadows(msgs ...*shadowpb.Shadow) otacore.StreamOpen {
-	return func(ctx context.Context, _ string) <-chan *shadowpb.Shadow {
+	return func(ctx context.Context, _ string) (<-chan *shadowpb.Shadow, <-chan error) {
 		ch := make(chan *shadowpb.Shadow)
+		errc := make(chan error)
 		go func() {
+			defer close(errc)
 			defer close(ch)
 			for _, msg := range msgs {
 				select {
@@ -444,7 +523,7 @@ func shadows(msgs ...*shadowpb.Shadow) otacore.StreamOpen {
 				}
 			}
 		}()
-		return ch
+		return ch, errc
 	}
 }
 
