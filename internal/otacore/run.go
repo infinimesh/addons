@@ -17,7 +17,7 @@ import (
 // StreamOpen is one namespace stream. The error channel receives at most one
 // error when the event channel closes, or it closes with no value.
 // StreamNamespaceToken is the production opener.
-type StreamOpen func(ctx context.Context, namespace string) (<-chan *shadowpb.Shadow, <-chan error)
+type StreamOpen func(ctx context.Context, namespace string, resume uint64) (<-chan *shadowpb.Shadow, <-chan error)
 
 // Runner watches the namespaces in Settings and calls Backend.
 type Runner struct {
@@ -106,11 +106,12 @@ func (r Runner) Run(ctx context.Context) error {
 }
 
 func (r Runner) runNS(ctx context.Context, st *store, ns string) error {
-	ch, errc := r.Open(ctx, ns)
+	ch, errc := r.Open(ctx, ns, st.seq(ns))
 	for msg := range ch {
 		if err := r.handle(ctx, st, ns, msg); err != nil {
 			return err
 		}
+		st.advance(ns, msg.GetSequence())
 	}
 	if errc == nil {
 		return nil
@@ -147,7 +148,12 @@ func (r Runner) handle(ctx context.Context, st *store, ns string, msg *shadowpb.
 	switch msg.GetEvent() {
 	case shadowpb.ShadowEvent_DEVICE_REMOVED:
 		return r.keepGoing(ctx, st, d, r.forget(ctx, st, d))
-	case shadowpb.ShadowEvent_DEVICE_ADDED, shadowpb.ShadowEvent_TAG_ADDED, shadowpb.ShadowEvent_TAG_REMOVED:
+	case shadowpb.ShadowEvent_DEVICE_ADDED:
+		if otaString(msg.GetDesired(), "requested_version") != "" {
+			return r.request(ctx, st, d, msg, true)
+		}
+		return r.keepGoing(ctx, st, d, r.ensure(ctx, st, d, true))
+	case shadowpb.ShadowEvent_TAG_ADDED, shadowpb.ShadowEvent_TAG_REMOVED:
 		return r.keepGoing(ctx, st, d, r.ensure(ctx, st, d, true))
 	case shadowpb.ShadowEvent_OTA_REQUESTED:
 		return r.request(ctx, st, d, msg, false)
@@ -156,6 +162,9 @@ func (r Runner) handle(ctx context.Context, st *store, ns string, msg *shadowpb.
 	case shadowpb.ShadowEvent_STATE:
 		return r.request(ctx, st, d, msg, false)
 	default:
+		if otaString(msg.GetDesired(), "requested_version") != "" {
+			return r.request(ctx, st, d, msg, false)
+		}
 		return nil
 	}
 }
@@ -175,8 +184,8 @@ func (r Runner) request(ctx context.Context, st *store, d Device, msg *shadowpb.
 		}
 		return nil
 	}
-	if err := r.keepGoing(ctx, st, d, r.deploy(ctx, st, d, version)); err != nil {
-		return err
+	if err := r.deploy(ctx, st, d, version); err != nil {
+		return r.keepGoing(ctx, st, d, err)
 	}
 	return r.mirror(ctx, st, d, msg)
 }
@@ -194,8 +203,8 @@ func (r Runner) retry(ctx context.Context, st *store, d Device) error {
 		rec, _ = st.get(key)
 	}
 	if rec.Want != "" && rec.Ensured {
-		if err := r.keepGoing(ctx, st, d, r.deploy(ctx, st, d, rec.Want)); err != nil {
-			return err
+		if err := r.deploy(ctx, st, d, rec.Want); err != nil {
+			return r.keepGoing(ctx, st, d, err)
 		}
 		rec, _ = st.get(key)
 	}
@@ -419,7 +428,9 @@ func (r Runner) mirror(ctx context.Context, st *store, d Device, msg *shadowpb.S
 	if snap.RawStatus != "" {
 		mapped, ok := MapStatus(r.Status, snap.RawStatus)
 		if !ok {
-			log.Printf("namespace %s: ota status %q is not in the status table\n", d.Namespace, snap.RawStatus)
+			if st.markUnknown(key, snap.RawStatus) {
+				log.Printf("namespace %s: ota status %q is not in the status table\n", d.Namespace, snap.RawStatus)
+			}
 		} else {
 			curStatus := shadowOr(otaString(msg.GetReported(), "status"), rec.Status)
 			curVersion := shadowOr(otaString(msg.GetReported(), "version"), rec.Version)
@@ -448,6 +459,10 @@ func (r Runner) mirror(ctx context.Context, st *store, d Device, msg *shadowpb.S
 			reported.Error = snap.Error
 			reported.ErrorSet = true
 		}
+	}
+	if !rec.Held && snap.Error == "" && rec.Error != "" && !reported.ErrorSet {
+		reported.Error = ""
+		reported.ErrorSet = true
 	}
 
 	p := Patch{Device: d.ID, Desired: desiredFields(desired), Reported: reportedFields(reported)}

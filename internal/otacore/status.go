@@ -1,5 +1,7 @@
 package otacore
 
+import "strings"
+
 // Mapped is a core ota status. Error is stored when the backend state needs one,
 // for example hawkBit canceled.
 type Mapped struct {
@@ -14,6 +16,9 @@ var coreStatus = map[string]struct{}{
 // MapStatus applies table. The result status has to be one of the five core values.
 func MapStatus(table map[string]Mapped, raw string) (Mapped, bool) {
 	m, ok := table[raw]
+	if !ok {
+		m, ok = table[strings.ToUpper(raw)]
+	}
 	if !ok {
 		return Mapped{}, false
 	}

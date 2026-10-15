@@ -24,7 +24,9 @@ inf namespaces update <namespace> --ota --provider hawkbit
 
 `token is revoked` means the plugin was rotated, its provider changed, or it was deleted. The process logs `token is revoked; run inf plugins rotate and update the secret` and exits non-zero, including when `OTA_POLL_SECS` is `0`. Run `inf plugins rotate <plugin>`, put the new bearer in `OTA_ADDON_TOKEN`, and start again.
 
-If hawkBit does not answer, the process writes `reported.ota.error` `hawkbit unreachable` and keeps running. It tries the same device again on the next event or poll. It does not post the action twice.
+If hawkBit does not answer, the process writes `reported.ota.error` `hawkbit unreachable` and keeps running. It tries the same device again on the next event or poll. It does not post the action twice. A target with no distribution set is not that error, and a later successful read clears `hawkbit unreachable`.
+
+hawkBit 0.9.0 reports `detailStatus` in lowercase (`running`, `retrieved`, `finished`). That is what is written to `reported.ota.status`. An `ota:request` that arrives while this process is down is deployed after the next start.
 
 ## Settings
 

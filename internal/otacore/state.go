@@ -32,6 +32,7 @@ type devState struct {
 type disk struct {
 	Devices map[string]devState `json:"devices"`
 	Quiet   map[string]string   `json:"quiet,omitempty"`
+	Seq     map[string]uint64   `json:"seq,omitempty"`
 }
 
 type store struct {
@@ -39,6 +40,8 @@ type store struct {
 	path    string
 	Devices map[string]devState
 	Quiet   map[string]string
+	Seq     map[string]uint64
+	unknown map[string]string
 }
 
 func loadStore(path string) (*store, error) {
@@ -60,7 +63,45 @@ func loadStore(path string) (*store, error) {
 	if d.Quiet != nil {
 		s.Quiet = d.Quiet
 	}
+	if d.Seq != nil {
+		s.Seq = d.Seq
+	}
 	return s, nil
+}
+
+func (s *store) seq(ns string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Seq[ns]
+}
+
+func (s *store) advance(ns string, seq uint64) {
+	if seq == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Seq[ns] >= seq {
+		return
+	}
+	if s.Seq == nil {
+		s.Seq = map[string]uint64{}
+	}
+	s.Seq[ns] = seq
+	_ = s.saveLocked()
+}
+
+func (s *store) markUnknown(key, raw string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unknown[key] == raw {
+		return false
+	}
+	if s.unknown == nil {
+		s.unknown = map[string]string{}
+	}
+	s.unknown[key] = raw
+	return true
 }
 
 func (s *store) quiet(ns string) bool {
@@ -129,7 +170,7 @@ func (s *store) del(key string) {
 }
 
 func (s *store) saveLocked() error {
-	d := disk{Devices: s.Devices, Quiet: s.Quiet}
+	d := disk{Devices: s.Devices, Quiet: s.Quiet, Seq: s.Seq}
 	b, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return err
