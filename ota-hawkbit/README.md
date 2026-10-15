@@ -62,3 +62,7 @@ inf ota assign --namespace <namespace> --device <device> --version <distribution
 The distribution set must already exist in hawkBit. A missing name is written once as `reported.ota.status` `failed` and is not retried.
 
 Apache-2.0.
+
+## Known limits
+
+When hawkBit hangs instead of refusing connections, the addon can take about 90 s before it writes `reported.ota.error` "hawkbit unreachable". It stays up during that time and deploys pending requests once hawkBit answers again.
