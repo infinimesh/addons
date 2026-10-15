@@ -18,6 +18,19 @@ type Missing struct{}
 
 func (e *Missing) Error() string { return "target missing" }
 
+// Report is a device condition written as reported status and error, then retried.
+type Report struct {
+	Status string
+	Msg    string
+}
+
+func (e *Report) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Msg
+}
+
 // Backend is one OTA system. Ids and idempotency stay in the state file, not the shadow.
 type Backend interface {
 	Name() string

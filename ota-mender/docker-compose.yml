@@ -1,0 +1,15 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: ota-mender/Dockerfile
+    environment:
+      - OTA_ADDON_TOKEN=CHANGEME
+      - OTA_NAMESPACE=CHANGEME
+      - API_URL=https://api.example.com
+      - MENDER_URL=https://mender.example
+      - MENDER_TOKEN=CHANGEME
+      - OTA_MENDER_ID_ATTR=infinimesh_id
+      - OTA_MENDER_GROUP_TAG=canary
+      - OTA_STATE_FILE=/tmp/ota-state.json
+    restart: on-failure
