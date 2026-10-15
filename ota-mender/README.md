@@ -40,7 +40,9 @@ Mender keeps a device in one static group. The group is the namespace. A device 
 
 `pending` is `idle`. `downloading` is `downloading`. `installing` and `rebooting` are `installing`. `success` and `already-installed` are `success`. `failure`, `aborted`, and `noartifact` are `failed`.
 
-If Mender does not answer, the process writes `reported.ota.error` `mender unreachable` and keeps running. A namespace whose provider is `hawkbit` is refused by core. This process logs `ota provider does not match the namespace` once and does not write that namespace.
+If Mender does not answer, the process writes `reported.ota.error` `mender unreachable` and keeps running. A rejected `MENDER_TOKEN` (401 or 403, with no user and password) is `mender token rejected`. The process logs `mender rejected the token` once and keeps running. A namespace whose provider is `hawkbit` is refused by core. This process logs `ota provider does not match the namespace` once and does not write that namespace.
+
+A deployment the device has not picked up yet is still the newest one. While it is pending, `reported.ota.status` is `idle` and `desired.ota.version` is that artifact. Assigning a different version aborts that open deployment and creates one for the requested artifact. An older success for the same artifact does not count while a newer deployment is still open.
 
 A missing artifact name is written once as `reported.ota.status` `failed` and is not retried.
 
