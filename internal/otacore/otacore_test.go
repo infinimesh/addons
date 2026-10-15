@@ -229,6 +229,122 @@ func TestRevokedTokenStops(t *testing.T) {
 	}
 }
 
+func TestSkipDeployWritesFailedOnce(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{deployErr: &SkipDeploy{Msg: "unknown version 9"}, snap: Snapshot{RawStatus: "idle"}}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(requested("dev", "9"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 1 || w.count() != 1 {
+		t.Fatalf("deploy=%d patches=%d", b.deploy, w.count())
+	}
+	if w.patches[0].Reported["status"] != "failed" || w.patches[0].Reported["error"] != "unknown version 9" {
+		t.Fatalf("reported = %v", w.patches[0].Reported)
+	}
+	r.Open = script(requested("dev", "9"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if b.deploy != 1 || w.count() != 1 {
+		t.Fatalf("retry deploy=%d patches=%d", b.deploy, w.count())
+	}
+}
+
+func TestHeldFailureFollowsANewAssignment(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{deployErr: &SkipDeploy{Msg: "unknown version 9"}, snap: Snapshot{RawStatus: "idle", Version: "1.0.0"}}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(requested("dev", "9"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.patches[0].Reported["status"] != "failed" {
+		t.Fatalf("reported = %v", w.patches[0].Reported)
+	}
+	for _, p := range w.patches {
+		if p.Reported["status"] == "idle" {
+			t.Fatalf("idle replaced the failure: %#v", w.patches)
+		}
+	}
+	n := w.count()
+	r.Open = script(requested("dev", "9"))
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != n {
+		t.Fatalf("patches = %d, want %d", w.count(), n)
+	}
+	b.mu.Lock()
+	b.snap = Snapshot{RawStatus: "success", Version: "2.0.0"}
+	b.mu.Unlock()
+	r.Poll = 20 * time.Millisecond
+	r.Open = script()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	last := w.patches[w.count()-1]
+	if last.Reported["status"] != "success" || last.Desired["version"] != "2.0.0" {
+		t.Fatalf("last = %#v", last)
+	}
+}
+
+func TestPollMirrorsEnsuredDevice(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{snap: Snapshot{Version: "9.9.0", RawStatus: "idle"}}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_DEVICE_ADDED})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 0 || b.deploy != 0 {
+		t.Fatalf("before poll patches=%d deploy=%d", w.count(), b.deploy)
+	}
+	r.Poll = 20 * time.Millisecond
+	r.Open = script()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 1 || w.patches[0].Desired["version"] != "9.9.0" {
+		t.Fatalf("patches = %d %v", w.count(), w.patches)
+	}
+	if b.deploy != 0 {
+		t.Fatalf("poll deployed %d", b.deploy)
+	}
+}
+
+func TestBackendErrorIsReportedOnce(t *testing.T) {
+	dir := t.TempDir()
+	b := &fakeBackend{snap: Snapshot{Error: "hawkbit unreachable"}}
+	w := &fakeWriter{}
+	r := testRunner(dir, b, w)
+	r.Open = script(&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_OTA_REQUESTED})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 1 || w.patches[0].Reported["error"] != "hawkbit unreachable" {
+		t.Fatalf("reported = %v", w.patches)
+	}
+	if w.patches[0].Reported["status"] != nil {
+		t.Fatalf("status = %v", w.patches[0].Reported["status"])
+	}
+	r.Open = script(&shadowpb.Shadow{Device: "dev", Event: shadowpb.ShadowEvent_OTA_REQUESTED})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w.count() != 1 {
+		t.Fatalf("patches = %d, want 1", w.count())
+	}
+}
+
 func TestWriterSendsAddonToken(t *testing.T) {
 	c := &fakeShadow{}
 	w := NewWriter(c, "addon-tok")
@@ -255,12 +371,13 @@ func TestWriterSendsAddonToken(t *testing.T) {
 }
 
 type fakeBackend struct {
-	mu     sync.Mutex
-	snap   Snapshot
-	ensure int
-	syncg  int
-	deploy int
-	forget int
+	mu        sync.Mutex
+	snap      Snapshot
+	deployErr error
+	ensure    int
+	syncg     int
+	deploy    int
+	forget    int
 }
 
 func (f *fakeBackend) Name() string { return "fake" }
@@ -282,8 +399,9 @@ func (f *fakeBackend) SyncGroup(context.Context, Device, []string, []string) err
 func (f *fakeBackend) Deploy(context.Context, Device, string) error {
 	f.mu.Lock()
 	f.deploy++
+	err := f.deployErr
 	f.mu.Unlock()
-	return nil
+	return err
 }
 
 func (f *fakeBackend) Status(context.Context, Device) (Snapshot, error) {

@@ -24,6 +24,20 @@ type Runner struct {
 	Writer   Writer
 	Status   map[string]Mapped
 	Now      func() time.Time
+	// Poll asks the backend for each known device on this interval.
+	// Zero disables it. hawkBit uses it to mirror a deployment started there.
+	Poll time.Duration
+}
+
+// SkipDeploy is a version the backend will not deploy. It is written once
+// as reported status failed and is not retried.
+type SkipDeploy struct{ Msg string }
+
+func (e *SkipDeploy) Error() string {
+	if e == nil || e.Msg == "" {
+		return "deploy skipped"
+	}
+	return e.Msg
 }
 
 var errRevoked = errors.New("token is revoked; run inf plugins rotate and update the secret")
@@ -44,13 +58,26 @@ func (r Runner) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
-	errc := make(chan error, len(r.Settings.Namespaces))
+	n := len(r.Settings.Namespaces)
+	if r.Poll > 0 {
+		n++
+	}
+	errc := make(chan error, n)
 	for _, ns := range r.Settings.Namespaces {
 		wg.Add(1)
 		go func(ns string) {
 			defer wg.Done()
 			errc <- r.runNS(ctx, st, ns)
 		}(ns)
+	}
+	if r.Poll > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := r.poll(ctx, st); err != nil {
+				errc <- err
+			}
+		}()
 	}
 	go func() {
 		wg.Wait()
@@ -79,6 +106,26 @@ func (r Runner) runNS(ctx context.Context, st *store, ns string) error {
 		}
 	}
 	return nil
+}
+
+func (r Runner) poll(ctx context.Context, st *store) error {
+	t := time.NewTicker(r.Poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+			for _, d := range st.list() {
+				if err := r.mirror(ctx, st, d, nil); err != nil {
+					if errors.Is(err, errRevoked) || ctx.Err() != nil {
+						return err
+					}
+					log.Printf("namespace %s: %s\n", d.Namespace, err)
+				}
+			}
+		}
+	}
 }
 
 func (r Runner) handle(ctx context.Context, st *store, ns string, msg *shadowpb.Shadow) error {
@@ -170,10 +217,40 @@ func (r Runner) deploy(ctx context.Context, st *store, d Device, version string)
 		return nil
 	}
 	if err := r.Backend.Deploy(ctx, d, version); err != nil {
+		var skip *SkipDeploy
+		if errors.As(err, &skip) {
+			rec.Namespace = d.Namespace
+			rec.Deployed = idKey
+			rec.Held = true
+			rec.HeldVersion = rec.Desired
+			st.put(key, rec)
+			return r.fail(ctx, st, d, skip.Error())
+		}
 		return err
 	}
 	rec.Namespace = d.Namespace
 	rec.Deployed = idKey
+	rec.Held = false
+	rec.SawHold = false
+	rec.HeldVersion = ""
+	st.put(key, rec)
+	return nil
+}
+
+func (r Runner) fail(ctx context.Context, st *store, d Device, msg string) error {
+	key := devKey(d.Namespace, d.ID)
+	rec, _ := st.get(key)
+	now := r.Now().UTC().Format(time.RFC3339)
+	p := Patch{Device: d.ID, Reported: reportedFields(Fields{
+		Status: "failed", Error: msg, ErrorSet: true, UpdatedAt: now,
+	})}
+	if err := r.write(ctx, st, d.Namespace, p); err != nil {
+		return err
+	}
+	rec.Namespace = d.Namespace
+	rec.Status = "failed"
+	rec.Error = msg
+	rec.ErrorSet = true
 	st.put(key, rec)
 	return nil
 }
@@ -230,7 +307,23 @@ func (r Runner) mirror(ctx context.Context, st *store, d Device, msg *shadowpb.S
 		}
 	}
 
+	if rec.Held {
+		if !rec.SawHold {
+			rec.SawHold = true
+			if snap.Version != "" {
+				rec.HeldVersion = snap.Version
+			}
+		} else if snap.Version != "" && snap.Version != rec.HeldVersion {
+			rec.Held = false
+			rec.SawHold = false
+			rec.HeldVersion = ""
+		}
+	}
 	reported := Fields{UpdatedAt: now}
+	if rec.Held {
+		snap.RawStatus = ""
+		snap.Error = ""
+	}
 	if snap.RawStatus != "" {
 		mapped, ok := MapStatus(r.Status, snap.RawStatus)
 		if !ok {
@@ -252,6 +345,16 @@ func (r Runner) mirror(ctx context.Context, st *store, d Device, msg *shadowpb.S
 				reported.Error = mapped.Error
 				reported.ErrorSet = true
 			}
+		}
+	}
+	if snap.Error != "" && !reported.ErrorSet {
+		curErr := rec.Error
+		if v, ok := otaValue(msg.GetReported(), "error"); ok {
+			curErr = v
+		}
+		if snap.Error != curErr {
+			reported.Error = snap.Error
+			reported.ErrorSet = true
 		}
 	}
 

@@ -3,23 +3,27 @@ package otacore
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 )
 
 type devState struct {
-	Namespace string   `json:"namespace"`
-	Tags      []string `json:"tags,omitempty"`
-	Ensured   bool     `json:"ensured"`
-	Deployed  string   `json:"deployed,omitempty"`
-	Status    string   `json:"status,omitempty"`
-	Version   string   `json:"version,omitempty"`
-	Error     string   `json:"error,omitempty"`
-	ErrorSet  bool     `json:"error_set,omitempty"`
-	Desired   string   `json:"desired,omitempty"`
-	URL       string   `json:"url,omitempty"`
-	SHA256    string   `json:"sha256,omitempty"`
-	Size      *int64   `json:"size,omitempty"`
-	SizeSet   bool     `json:"size_set,omitempty"`
+	Namespace   string   `json:"namespace"`
+	Tags        []string `json:"tags,omitempty"`
+	Ensured     bool     `json:"ensured"`
+	Deployed    string   `json:"deployed,omitempty"`
+	Held        bool     `json:"held,omitempty"`
+	SawHold     bool     `json:"saw_hold,omitempty"`
+	HeldVersion string   `json:"held_version,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	ErrorSet    bool     `json:"error_set,omitempty"`
+	Desired     string   `json:"desired,omitempty"`
+	URL         string   `json:"url,omitempty"`
+	SHA256      string   `json:"sha256,omitempty"`
+	Size        *int64   `json:"size,omitempty"`
+	SizeSet     bool     `json:"size_set,omitempty"`
 }
 
 type disk struct {
@@ -90,6 +94,25 @@ func (s *store) put(key string, d devState) {
 	d.Tags = append([]string(nil), d.Tags...)
 	s.Devices[key] = d
 	_ = s.saveLocked()
+}
+
+func (s *store) list() []Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Device, 0, len(s.Devices))
+	for key, d := range s.Devices {
+		if !d.Ensured {
+			continue
+		}
+		id := key
+		if i := strings.LastIndex(key, "/"); i >= 0 {
+			id = key[i+1:]
+		}
+		out = append(out, Device{
+			ID: id, Namespace: d.Namespace, Tags: append([]string(nil), d.Tags...),
+		})
+	}
+	return out
 }
 
 func (s *store) del(key string) {

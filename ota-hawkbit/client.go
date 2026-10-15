@@ -1,0 +1,316 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+type client struct {
+	base   string
+	user   string
+	pass   string
+	http   *http.Client
+	groups map[string]struct{}
+}
+
+func newClient(base, user, pass string, groups []string) (*client, error) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return nil, errors.New("HAWKBIT_URL is required")
+	}
+	if user == "" || pass == "" {
+		return nil, errors.New("HAWKBIT_USER and HAWKBIT_PASSWORD are required")
+	}
+	g := map[string]struct{}{}
+	for _, name := range groups {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			g[name] = struct{}{}
+		}
+	}
+	return &client{
+		base: base, user: user, pass: pass, groups: g,
+		http: &http.Client{Timeout: 30 * time.Second},
+	}, nil
+}
+
+func (c *client) do(ctx context.Context, method, path string, body any) (int, []byte, error) {
+	var payload []byte
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		payload = b
+	}
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		var rdr io.Reader
+		if payload != nil {
+			rdr = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.base+path, rdr)
+		if err != nil {
+			return 0, nil, err
+		}
+		req.SetBasicAuth(c.user, c.pass)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Accept", "application/json")
+		res, err := c.http.Do(req)
+		if err != nil {
+			last = err
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		res.Body.Close()
+		if err != nil {
+			return res.StatusCode, nil, err
+		}
+		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500 {
+			last = fmt.Errorf("hawkbit %s %s: %d", method, path, res.StatusCode)
+			continue
+		}
+		return res.StatusCode, raw, nil
+	}
+	if last == nil {
+		last = errors.New("hawkbit unreachable")
+	}
+	return 0, nil, last
+}
+
+type page struct {
+	Content []map[string]any `json:"content"`
+}
+
+func decodeList(raw []byte) ([]map[string]any, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil, nil
+	}
+	if raw[0] == '[' {
+		var rows []map[string]any
+		if err := json.Unmarshal(raw, &rows); err != nil {
+			return nil, err
+		}
+		return rows, nil
+	}
+	var p page
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	return p.Content, nil
+}
+
+func decodeOne(raw []byte) (map[string]any, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *client) ensureTarget(ctx context.Context, id, name string) error {
+	code, _, err := c.do(ctx, http.MethodGet, "/rest/v1/targets/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusOK {
+		return nil
+	}
+	if code != http.StatusNotFound {
+		return fmt.Errorf("hawkbit target %s: %d", id, code)
+	}
+	if name == "" {
+		name = id
+	}
+	code, _, err = c.do(ctx, http.MethodPost, "/rest/v1/targets", []map[string]string{{
+		"controllerId": id,
+		"name":         name,
+	}})
+	if err != nil {
+		return err
+	}
+	if code != http.StatusCreated && code != http.StatusOK && code != http.StatusConflict {
+		return fmt.Errorf("hawkbit create target %s: %d", id, code)
+	}
+	return nil
+}
+
+func (c *client) deleteTarget(ctx context.Context, id string) error {
+	code, _, err := c.do(ctx, http.MethodDelete, "/rest/v1/targets/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusOK || code == http.StatusNoContent || code == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("hawkbit delete target %s: %d", id, code)
+}
+
+func (c *client) tagID(ctx context.Context, name string) (float64, error) {
+	q := url.QueryEscape(`name=="` + strings.ReplaceAll(name, `"`, "") + `"`)
+	code, raw, err := c.do(ctx, http.MethodGet, "/rest/v1/targettags?limit=1&q="+q, nil)
+	if err != nil {
+		return 0, err
+	}
+	if code != http.StatusOK {
+		return 0, fmt.Errorf("hawkbit target tags: %d", code)
+	}
+	rows, err := decodeList(raw)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		if str(row["name"]) == name {
+			return num(row["id"]), nil
+		}
+	}
+	code, raw, err = c.do(ctx, http.MethodPost, "/rest/v1/targettags", []map[string]string{{"name": name}})
+	if err != nil {
+		return 0, err
+	}
+	if code != http.StatusCreated && code != http.StatusOK {
+		return 0, fmt.Errorf("hawkbit create tag %s: %d", name, code)
+	}
+	rows, err = decodeList(raw)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, fmt.Errorf("hawkbit create tag %s: empty response", name)
+	}
+	return num(rows[0]["id"]), nil
+}
+
+func (c *client) setTag(ctx context.Context, tag, controller string, on bool) error {
+	id, err := c.tagID(ctx, tag)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/rest/v1/targettags/%.0f/assigned/%s", id, url.PathEscape(controller))
+	method := http.MethodPost
+	if !on {
+		method = http.MethodDelete
+	}
+	code, _, err := c.do(ctx, method, path, nil)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusOK || code == http.StatusCreated || code == http.StatusNoContent || code == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("hawkbit tag %s: %d", tag, code)
+}
+
+type dist struct {
+	ID   float64
+	Name string
+}
+
+func (c *client) findDist(ctx context.Context, name string) (dist, bool, error) {
+	q := url.QueryEscape(`name=="` + strings.ReplaceAll(name, `"`, "") + `"`)
+	code, raw, err := c.do(ctx, http.MethodGet, "/rest/v1/distributionsets?limit=50&q="+q, nil)
+	if err != nil {
+		return dist{}, false, err
+	}
+	if code != http.StatusOK {
+		return dist{}, false, fmt.Errorf("hawkbit distribution sets: %d", code)
+	}
+	rows, err := decodeList(raw)
+	if err != nil {
+		return dist{}, false, err
+	}
+	for _, row := range rows {
+		if str(row["name"]) == name {
+			return dist{ID: num(row["id"]), Name: name}, true, nil
+		}
+	}
+	return dist{}, false, nil
+}
+
+func (c *client) assigned(ctx context.Context, controller string) (dist, bool, error) {
+	code, raw, err := c.do(ctx, http.MethodGet, "/rest/v1/targets/"+url.PathEscape(controller)+"/assignedDS", nil)
+	if err != nil {
+		return dist{}, false, err
+	}
+	if code == http.StatusNotFound {
+		return dist{}, false, nil
+	}
+	if code != http.StatusOK {
+		return dist{}, false, fmt.Errorf("hawkbit assigned distribution set: %d", code)
+	}
+	row, err := decodeOne(raw)
+	if err != nil || row == nil || str(row["name"]) == "" {
+		return dist{}, false, err
+	}
+	return dist{ID: num(row["id"]), Name: str(row["name"])}, true, nil
+}
+
+type action struct {
+	Status string
+	DistID float64
+}
+
+func (c *client) latestAction(ctx context.Context, controller string) (action, bool, error) {
+	path := "/rest/v1/targets/" + url.PathEscape(controller) + "/actions?limit=1&sort=id:DESC&representation=full"
+	code, raw, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return action{}, false, err
+	}
+	if code == http.StatusNotFound {
+		return action{}, false, nil
+	}
+	if code != http.StatusOK {
+		return action{}, false, fmt.Errorf("hawkbit actions: %d", code)
+	}
+	rows, err := decodeList(raw)
+	if err != nil || len(rows) == 0 {
+		return action{}, false, err
+	}
+	row := rows[0]
+	ds, _ := row["distributionSet"].(map[string]any)
+	return action{Status: str(row["status"]), DistID: num(ds["id"])}, true, nil
+}
+
+func (c *client) assign(ctx context.Context, controller string, ds dist) error {
+	body := []map[string]any{{"id": ds.ID, "type": "forced"}}
+	code, _, err := c.do(ctx, http.MethodPost, "/rest/v1/targets/"+url.PathEscape(controller)+"/assignedDS", body)
+	if err != nil {
+		return err
+	}
+	if code == http.StatusOK || code == http.StatusCreated {
+		return nil
+	}
+	return fmt.Errorf("hawkbit assign %s: %d", ds.Name, code)
+}
+
+func str(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func num(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	default:
+		return 0
+	}
+}
