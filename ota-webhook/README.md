@@ -9,7 +9,7 @@ Connects one infinimesh namespace to an HTTP endpoint you run. Core publishes `O
 }
 ```
 
-You need Docker, the `inf` CLI, and a core API that lets a webhook addon token read the namespace. The core `v3.4.1` image does not. The process stops with `could not read the namespace webhook_url` until the API does. This addon is not published as an image. Build it from this repository.
+You need Docker, the `inf` CLI, and core 3.4.2 or newer. The webhook addon reads the namespace with its addon token. The core v3.4.1 image does not serve that read, and the process stops with `could not read the namespace webhook_url`. This addon is not published as an image. Build it from this repository.
 
 ## Settings
 
