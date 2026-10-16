@@ -1,6 +1,6 @@
 # hawkBit
 
-Tested on core v3.4.1.
+Released in addons v3.4.2. Tested on core v3.4.1 and v3.4.2.
 
 Connects one infinimesh namespace to a hawkBit update server. The device uuid is the hawkBit controller id. A deployment started in hawkBit is written to `desired.ota.version`. `inf ota assign` stores `requested_version`, and this addon assigns the distribution set of that name.
 
@@ -11,7 +11,7 @@ Connects one infinimesh namespace to a hawkBit update server. The device uuid is
 }
 ```
 
-You need Docker, a core v3.4.1 API, and the `inf` CLI.
+You need Docker, core 3.4.1 or newer, and the `inf` CLI.
 
 ## Settings
 
