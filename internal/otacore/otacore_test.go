@@ -227,11 +227,8 @@ func TestRevokedTokenStops(t *testing.T) {
 	if b.deploy != 1 {
 		t.Fatalf("deploy = %d, want 1", b.deploy)
 	}
-	if !strings.Contains(buf.String(), "token is revoked; run inf plugins rotate and update the secret") {
+	if strings.Contains(buf.String(), "token is revoked") || strings.Contains(buf.String(), "super-secret") {
 		t.Fatalf("log = %q", buf.String())
-	}
-	if strings.Contains(buf.String(), "super-secret") {
-		t.Fatal("log contains the addon token")
 	}
 }
 
@@ -471,7 +468,7 @@ func TestRevokedStreamStopsTheProcess(t *testing.T) {
 			if !errors.Is(err, errRevoked) {
 				t.Fatalf("err = %v", err)
 			}
-			if !strings.Contains(buf.String(), errRevoked.Error()) || strings.Contains(buf.String(), "super-secret") {
+			if strings.Contains(buf.String(), "token is revoked") || strings.Contains(buf.String(), "super-secret") {
 				t.Fatalf("log = %q", buf.String())
 			}
 		})

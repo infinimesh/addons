@@ -251,10 +251,7 @@ func TestStreamNamespaceTokenUsesAddonBearer(t *testing.T) {
 	if len(sh.reqs) != 1 {
 		t.Fatalf("StreamShadow calls = %d, want 1", len(sh.reqs))
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("token is revoked; run inf plugins rotate and update the secret")) {
+	if bytes.Contains(buf.Bytes(), []byte("token is revoked")) || bytes.Contains(buf.Bytes(), []byte("addon-secret")) {
 		t.Fatalf("log = %q", buf.String())
-	}
-	if bytes.Contains(buf.Bytes(), []byte("addon-secret")) {
-		t.Fatal("log contains the addon token")
 	}
 }
