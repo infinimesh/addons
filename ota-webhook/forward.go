@@ -200,5 +200,27 @@ func (a *app) flush(ctx context.Context) {
 			continue
 		}
 		a.book.markSent(p.ID)
+		a.book.noteDevice("", shadowFromBody(p.Body))
+	}
+}
+
+func shadowFromBody(body []byte) *shadowpb.Shadow {
+	var doc outbound
+	if json.Unmarshal(body, &doc) != nil || doc.Device == "" {
+		return nil
+	}
+	ev, ok := shadowpb.ShadowEvent_value[doc.Event]
+	if !ok {
+		return nil
+	}
+	return &shadowpb.Shadow{
+		EventId:   doc.EventID,
+		Event:     shadowpb.ShadowEvent(ev),
+		Sequence:  doc.Sequence,
+		Device:    doc.Device,
+		Namespace: doc.Namespace,
+		Title:     doc.Title,
+		Tags:      doc.Tags,
+		Tag:       doc.Tag,
 	}
 }

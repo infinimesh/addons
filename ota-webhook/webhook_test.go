@@ -173,6 +173,57 @@ func TestFiveXXDoesNotDuplicateAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestLateFlushDoesNotRepostOnRestart(t *testing.T) {
+	var n int
+	down := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if down {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	book, err := loadBook(dir + "/state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(config{Secret: "secret", URLs: map[string]string{"plant": srv.URL}}, book, nil, &fakeWriter{})
+	a.post.maxRetries = 0
+	a.post.sleep = func(context.Context, time.Duration) error { return nil }
+	known := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2", EventId: 12, Sequence: 12, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", known); err != nil {
+		t.Fatal(err)
+	}
+	a.book.advance("plant", 12)
+	down = true
+	rename := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2-renamed", EventId: 13, Sequence: 13, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := a.handle(context.Background(), "plant", rename); err != nil {
+		t.Fatal(err)
+	}
+	a.book.advance("plant", 13)
+	down = false
+	a.flush(context.Background())
+	posted := n
+	restarted, err := loadBook(dir + "/state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newApp(config{Secret: "secret", URLs: map[string]string{"plant": srv.URL}}, restarted, nil, &fakeWriter{})
+	snap := &shadowpb.Shadow{Device: "w2", Namespace: "plant", Title: "w2-renamed", EventId: 40, Event: shadowpb.ShadowEvent_DEVICE_ADDED}
+	if err := b.handle(context.Background(), "plant", snap); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.releaseHeld(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if n != posted {
+		t.Fatalf("posts %d, want %d", n, posted)
+	}
+}
+
 func TestRestartSkipsSentEvent(t *testing.T) {
 	var n int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
