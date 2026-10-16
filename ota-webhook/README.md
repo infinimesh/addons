@@ -1,5 +1,7 @@
 # Webhook
 
+Released in addons v3.4.2. Tested on core v3.4.2.
+
 Connects one infinimesh namespace to an HTTP endpoint you run. Core publishes `OTA_REQUESTED`, `OTA_TARGET_SET`, `OTA_STATUS_CHANGED`, and device membership events. This addon POSTs each of those once to the namespace `ota.webhook_url`. Your endpoint can POST a target or a report back. A target is written to `desired.ota`, and core then publishes `OTA_TARGET_SET` when `version` changes.
 
 ```json

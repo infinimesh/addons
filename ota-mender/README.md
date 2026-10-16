@@ -1,6 +1,6 @@
 # Mender
 
-Tested on core v3.4.1.
+Released in addons v3.4.2. Tested on core v3.4.1 and v3.4.2.
 
 Connects one infinimesh namespace to a Mender open source server. The device is the inventory row whose `OTA_MENDER_ID_ATTR` equals the device uuid. A deployment started in Mender is written to `desired.ota.version` as the artifact name. `inf ota assign` stores `requested_version`, and this addon creates one deployment of that artifact for that device.
 
@@ -11,7 +11,7 @@ Connects one infinimesh namespace to a Mender open source server. The device is 
 }
 ```
 
-You need Docker, a core v3.4.1 API, the `inf` CLI, and a Mender open source server. This addon is not published as an image. Build it from this repository.
+You need Docker, core 3.4.1 or newer, the `inf` CLI, and a Mender open source server. This addon is not published as an image. Build it from this repository.
 
 ## Settings
 
