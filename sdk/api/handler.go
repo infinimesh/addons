@@ -296,7 +296,6 @@ func (h *handlerImpl) openNamespace(ctx context.Context, namespaceID string, inc
 			err := h.streamNamespaceOnce(ctx, namespaceID, include, addon, addonToken, &last, &resync, ret)
 			if err != nil && ctx.Err() == nil {
 				if addon && isRevoked(err) {
-					log.Printf("%s\n", ErrTokenRevoked.Error())
 					errc <- ErrTokenRevoked
 					return
 				}

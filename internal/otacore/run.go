@@ -99,9 +99,6 @@ func (r Runner) Run(ctx context.Context) error {
 			cancel()
 		}
 	}
-	if errors.Is(first, errRevoked) {
-		log.Printf("%s\n", errRevoked.Error())
-	}
 	return first
 }
 
