@@ -49,7 +49,7 @@ curl -s -X POST "$API/v1/plugins" \
   -d '{"title":"Hawkbit","kind":"OTA","provider":"hawkbit","public":true}'
 ```
 
-The addon sends `Authorization: Bearer <token>` on patches that set `desired.ota`. A later get returns `token_id` and an empty `token`. Deleting the plugin, or changing its provider, invalidates that token. This is not a call the addon SDK makes. A shadow addon still logs in with `USERNAME` and `PASSWORD`. [`ota-hawkbit`](../ota-hawkbit/README.md) uses the plugin bearer as `OTA_ADDON_TOKEN` and does not log in with an account. An `http://` `API_URL` needs `OTA_ALLOW_INSECURE=1`, the same as an `http://` hawkBit URL.
+The addon sends `Authorization: Bearer <token>` on patches that set `desired.ota`. A later get returns `token_id` and an empty `token`. Deleting the plugin, or changing its provider, invalidates that token. This is not a call the addon SDK makes. A shadow addon still logs in with `USERNAME` and `PASSWORD`. [`ota-hawkbit`](../ota-hawkbit/README.md), [`ota-mender`](../ota-mender/README.md), and [`ota-webhook`](../ota-webhook/README.md) use the plugin bearer as `OTA_ADDON_TOKEN` and do not log in with an account. None of them is published as an image. An `http://` `API_URL` needs `OTA_ALLOW_INSECURE=1`. The webhook addon also reads the namespace webhook URL with that token. The core `v3.4.1` image does not allow that read, and the process stops with `could not read the namespace webhook_url`.
 
 ## The SDK
 

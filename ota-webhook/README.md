@@ -1,7 +1,5 @@
 # Webhook
 
-Tested on core v3.4.1.
-
 Connects one infinimesh namespace to an HTTP endpoint you run. Core publishes `OTA_REQUESTED`, `OTA_TARGET_SET`, `OTA_STATUS_CHANGED`, and device membership events. This addon POSTs each of those once to the namespace `ota.webhook_url`. Your endpoint can POST a target or a report back. A target is written to `desired.ota`, and core then publishes `OTA_TARGET_SET` when `version` changes.
 
 ```json
@@ -11,7 +9,7 @@ Connects one infinimesh namespace to an HTTP endpoint you run. Core publishes `O
 }
 ```
 
-You need Docker, a core v3.4.1 API, and the `inf` CLI. This addon is not published as an image. Build it from this repository.
+You need Docker, the `inf` CLI, and a core API that lets a webhook addon token read the namespace. The core `v3.4.1` image does not. The process stops with `could not read the namespace webhook_url` until the API does. This addon is not published as an image. Build it from this repository.
 
 ## Settings
 
