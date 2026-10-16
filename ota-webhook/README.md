@@ -41,7 +41,7 @@ Each post is JSON. `event` is `OTA_REQUESTED`, `OTA_TARGET_SET`, `OTA_STATUS_CHA
 
 Opening the stream makes core send the current device list as `DEVICE_ADDED` with sequence 0 and a new `event_id`, then it replays events from while the process was down. The process keeps each device's id, title, and tags in `OTA_STATE_FILE`. A list entry is posted only when the device is new or its title or tags changed, and that body has `"snapshot": true`. On a restart the list entry is held until the replay. If the replay has the same device with the same title and tags, only that replayed event is posted. A list entry the replay does not cover is posted when a later event arrives for that namespace, or on the next poll. The same device on the next restart is not posted again. A later `DEVICE_ADDED` is posted when the title or tags changed.
 
-A 2xx is success. The same `event_id` is not posted again. A network error, 408, 429, or 5xx is tried again, up to 6 times, waiting 200ms and then doubling up to 30s. After that the post stays in `OTA_STATE_FILE` and is tried on the next poll. A success after those retries is still one delivery.
+A 2xx is success. The same `event_id` is not posted again. A network error, 408, 429, or 5xx is tried again, up to 6 times, waiting 200ms and then doubling up to 30s. After that the post stays in `OTA_STATE_FILE` and is tried on the next poll. A success after those retries is still one delivery, and the saved device title and tags are updated from that post. A restart does not post that change again.
 
 ## Inbound
 
