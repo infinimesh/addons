@@ -2,6 +2,8 @@ module github.com/infinimesh/addons
 
 go 1.27.2
 
+toolchain go1.27.3
+
 require (
 	cloud.google.com/go/storage v1.69.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
