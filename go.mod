@@ -8,7 +8,7 @@ require (
 	cloud.google.com/go/storage v1.70.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/RedisTimeSeries/redistimeseries-go v1.4.4
-	github.com/SAP/go-hdb v1.21.1
+	github.com/SAP/go-hdb v1.22.1
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.20
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
