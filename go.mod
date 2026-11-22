@@ -18,7 +18,7 @@ require (
 	github.com/infinimesh/proto v1.2.1
 	github.com/influxdata/influxdb-client-go/v2 v2.14.0
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/snowflakedb/gosnowflake/v2 v2.3.0
+	github.com/snowflakedb/gosnowflake/v2 v2.4.0
 	github.com/twmb/franz-go v1.22.3
 	github.com/twmb/franz-go/pkg/kadm v1.19.0
 	google.golang.org/grpc v1.85.0
